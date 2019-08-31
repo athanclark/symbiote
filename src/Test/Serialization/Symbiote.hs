@@ -40,7 +40,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.String (IsString)
 import Data.Proxy (Proxy (..))
-import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', atomically)
+import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', writeTVar, atomically)
 import Control.Monad (forever)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.State (StateT, modify', execStateT)
@@ -171,12 +171,14 @@ data Generating s
   | BadResult s -- ^ Expected value
   | YourTurn
   | GeneratingNoParseOperated s
+  deriving (Eq, Show)
 
 -- | Messages sent by a peer during their operating phase
 data Operating s
   = Operated s -- ^ Serialized value after operation
   | OperatingNoParseValue s
   | OperatingNoParseOperation s
+  deriving (Eq, Show)
 
 -- | Messages sent by the first peer
 data First s
@@ -189,6 +191,7 @@ data First s
     { firstOperatingTopic :: Topic
     , firstOperating :: Operating s
     }
+  deriving (Eq, Show)
 
 -- | Messages sent by the second peer
 data Second s
@@ -202,9 +205,13 @@ data Second s
     { secondGeneratingTopic :: Topic
     , secondGenerating :: Generating s
     }
+  deriving (Eq, Show)
 
 
-firstPeer :: (First s -> m ()) -- ^ Encode and send first messages
+firstPeer :: forall m s
+           . MonadIO m
+          => Show s
+          => (First s -> m ()) -- ^ Encode and send first messages
           -> (m (Second s)) -- ^ Receive and decode second messages
           -> SymbioteT s m ()
           -> m ()
@@ -217,13 +224,13 @@ firstPeer encodeAndSend receiveAndDecode x = do
     BadTopics badTopics ->
       error $ "Bad topics - available topics: " ++ show topics ++ ", bad topics: " ++ show badTopics
     Start -> do
-      topicsToProcess <- liftIO (newTVarIO topics)
+      topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
       let loop = do
-            mTopicToProcess <- Set.maxView <$> liftIO (atomically (readTVar topics))
+            mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
             case mTopicToProcess of
               Nothing -> pure () -- done?
               Just (topic, newTopics) -> do
-                liftIO (atomically (writeTVar newTopics))
+                liftIO (atomically (writeTVar topicsToProcess newTopics))
                 case Map.lookup topic state of
                   Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
                   Just symbioteState -> generating topic symbioteState
@@ -231,7 +238,7 @@ firstPeer encodeAndSend receiveAndDecode x = do
     _ -> error $ "Broken internally. Message received: " ++ show shouldBeStart
   where
     generating :: Topic -> SymbioteState s -> m ()
-    generating topic symbioteState = do
+    generating topic symbioteState@SymbioteState{equal} = do
       mGenerated <- generateSymbiote symbioteState topic
       case mGenerated of
         DoneGenerating -> undefined -- wait for second?
@@ -254,11 +261,11 @@ firstPeer encodeAndSend receiveAndDecode x = do
                   Operated operatedValueEncoded -> case decode operatedValueEncoded of
                     Nothing -> do
                       encodeAndSend $ FirstGenerating topic $ GeneratingNoParseOperated operatedValueEncoded
-                      error $ "Couldn't parse: " ++ show s
+                      error $ "Couldn't parse: " ++ show operatedValueEncoded
                     Just operatedValue -> case decode generatedValueEncoded of
-                      Nothing -> error $ "Broken internally - couldn't decode encoded local value: " ++ generatedValueEncoded
+                      Nothing -> error $ "Broken internally - couldn't decode encoded local value: " ++ show generatedValueEncoded
                       Just generatedValue -> case decodeOp generatedOperationEncoded of
-                        Nothing -> error $ "Broken internally - couldn't decode encoded local operation: " ++ generatedOperationEncoded
+                        Nothing -> error $ "Broken internally - couldn't decode encoded local operation: " ++ show generatedOperationEncoded
                         Just generatedOperation ->
                           encodeAndSend $ FirstGenerating topic $
                             if equal (perform generatedOperation generatedValue) operatedValue
@@ -268,7 +275,10 @@ firstPeer encodeAndSend receiveAndDecode x = do
             _ -> error $ "Broken internally. Expected operating, received: " ++ show shouldBeOperating
 
 
-secondPeer :: (Second s -> m ()) -- ^ Encode and send second messages
+secondPeer :: forall s m
+            . MonadIO m
+           => Show s
+           => (Second s -> m ()) -- ^ Encode and send second messages
            -> (m (First s)) -- ^ Receive and decode first messages
            -> SymbioteT s m ()
            -> m ()
