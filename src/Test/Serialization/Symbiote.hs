@@ -105,6 +105,11 @@ data SymbioteState s =
   , equal      :: a -> a -> Bool
   , maxSize    :: Int
   , generation :: TVar (SymbioteGeneration a s)
+  , encode'    :: a -> s
+  , encodeOp'  :: Operation a -> s
+  , decode'    :: s -> Maybe a
+  , decodeOp'  :: s -> Maybe (Operation a)
+  , perform'   :: Operation a -> a -> a
   }
 
 
@@ -159,6 +164,11 @@ register t maxSize Proxy = do
         , equal = (==) :: a -> a -> Bool
         , maxSize
         , generation
+        , encode' = encode
+        , encodeOp' = encodeOp
+        , decode' = decode
+        , decodeOp' = decodeOp
+        , perform' = perform
         }
   modify' (Map.insert t newState)
 
@@ -225,54 +235,15 @@ firstPeer encodeAndSend receiveAndDecode x = do
       error $ "Bad topics - available topics: " ++ show topics ++ ", bad topics: " ++ show badTopics
     Start -> do
       topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
-      let loop = do
-            mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
-            case mTopicToProcess of
-              Nothing -> pure () -- done?
-              Just (topic, newTopics) -> do
-                liftIO (atomically (writeTVar topicsToProcess newTopics))
-                case Map.lookup topic state of
-                  Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
-                  Just symbioteState -> generating topic symbioteState
-      loop
+      mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
+      case mTopicToProcess of
+        Nothing -> pure () -- done?
+        Just (topic, newTopics) -> do
+          liftIO (atomically (writeTVar topicsToProcess newTopics))
+          case Map.lookup topic state of
+            Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
+            Just symbioteState -> generating encodeAndSend receiveAndDecode FirstGenerating FirstOperating (\(SecondGenerating t g) -> (t,g)) (\(SecondOperating t o) -> (t,o)) topic symbioteState
     _ -> error $ "Broken internally. Message received: " ++ show shouldBeStart
-  where
-    generating :: Topic -> SymbioteState s -> m ()
-    generating topic symbioteState@SymbioteState{equal} = do
-      mGenerated <- generateSymbiote symbioteState topic
-      case mGenerated of
-        DoneGenerating -> undefined -- wait for second?
-        GeneratedSymbiote
-          { generatedValue = generatedValueEncoded
-          , generatedOperation = generatedOperationEncoded
-          } -> do
-          encodeAndSend $ FirstGenerating
-            { firstGeneratingTopic = topic
-            , firstGenerating = Generated
-              { genValue = generatedValueEncoded
-              , genOperation = generatedOperationEncoded
-              }
-            }
-          shouldBeOperating <- receiveAndDecode
-          case shouldBeOperating of
-            SecondOperating {secondOperatingTopic,secondOperating = shouldBeOperated}
-              | secondOperatingTopic /= topic -> error $ "Broken internally. Wrong topic - expected: " ++ show topic ++ ", received: " ++ show secondOperatingTopic
-              | otherwise -> case shouldBeOperated of
-                  Operated operatedValueEncoded -> case decode operatedValueEncoded of
-                    Nothing -> do
-                      encodeAndSend $ FirstGenerating topic $ GeneratingNoParseOperated operatedValueEncoded
-                      error $ "Couldn't parse: " ++ show operatedValueEncoded
-                    Just operatedValue -> case decode generatedValueEncoded of
-                      Nothing -> error $ "Broken internally - couldn't decode encoded local value: " ++ show generatedValueEncoded
-                      Just generatedValue -> case decodeOp generatedOperationEncoded of
-                        Nothing -> error $ "Broken internally - couldn't decode encoded local operation: " ++ show generatedOperationEncoded
-                        Just generatedOperation ->
-                          encodeAndSend $ FirstGenerating topic $
-                            if equal (perform generatedOperation generatedValue) operatedValue
-                              then YourTurn
-                              else BadResult operatedValueEncoded
-                  _ -> error $ "Broken internally - something couldn't parse. Received: " ++ show shouldBeOperated
-            _ -> error $ "Broken internally. Expected operating, received: " ++ show shouldBeOperating
 
 
 secondPeer :: forall s m
@@ -303,3 +274,87 @@ secondPeer encodeAndSend receiveAndDecode x = do
                   FirstOperating {firstOperatingTopic,firstOperating} -> undefined
           loop
     _ -> undefined -- something's broken internally
+
+
+
+generating :: MonadIO m
+           => Show s
+           => (me s -> m ()) -- ^ Encode and send first messages
+           -> (m (them s)) -- ^ Receive and decode second messages
+           -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
+           -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
+           -> (them s -> (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> (them s -> (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> Topic
+           -> SymbioteState s
+           -> m ()
+generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState@SymbioteState{equal} = do
+  mGenerated <- generateSymbiote symbioteState topic
+  case mGenerated of
+    DoneGenerating -> liftIO $ putStrLn $ "Finished topic " ++ show topic
+    GeneratedSymbiote
+      { generatedValue = generatedValueEncoded
+      , generatedOperation = generatedOperationEncoded
+      } -> do
+      encodeAndSend $ makeGen topic $ Generated
+        { genValue = generatedValueEncoded
+        , genOperation = generatedOperationEncoded
+        }
+      shouldBeOperating <- getOp <$> receiveAndDecode
+      case shouldBeOperating of
+        (secondOperatingTopic, shouldBeOperated)
+          | secondOperatingTopic /= topic -> badTopicError topic secondOperatingTopic
+          | otherwise -> case shouldBeOperated of
+              Operated operatedValueEncoded -> case decode operatedValueEncoded of
+                Nothing -> do
+                  encodeAndSend $ makeGen topic $ GeneratingNoParseOperated operatedValueEncoded
+                  error $ "Couldn't parse: " ++ show operatedValueEncoded
+                Just operatedValue -> case decode generatedValueEncoded of
+                  Nothing -> error $ "Broken internally - couldn't decode encoded local value: " ++ show generatedValueEncoded
+                  Just generatedValue -> case decodeOp generatedOperationEncoded of
+                    Nothing -> error $ "Broken internally - couldn't decode encoded local operation: " ++ show generatedOperationEncoded
+                    Just generatedOperation ->
+                      if equal (perform generatedOperation generatedValue) operatedValue
+                        then do
+                          encodeAndSend $ makeGen topic YourTurn -- FIXME receive then loop
+                          operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState
+                        else encodeAndSend $ makeGen topic $ BadResult operatedValueEncoded
+              _ -> error $ "Broken internally - something couldn't parse. Received: " ++ show shouldBeOperated
+        _ -> error $ "Broken internally. Expected operating, received: " ++ show shouldBeOperating
+
+operating :: MonadIO m
+          => Show s
+          => (me s -> m ()) -- ^ Encode and send first messages
+          -> (m (them s)) -- ^ Receive and decode second messages
+          -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
+          -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
+          -> (them s -> (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
+          -> (them s -> (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+          -> Topic
+          -> SymbioteState s
+          -> m ()
+operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState@SymbioteState{decode',decodeOp',perform',encode'} = do
+  shouldBeGenerating <- getGen <$> receiveAndDecode
+  case shouldBeGenerating of
+    (secondGeneratingTopic,shouldBeGenerated)
+      | secondGeneratingTopic /= topic -> badTopicError topic secondGeneratingTopic
+      | otherwise -> case shouldBeGenerated of
+          Generated
+            { genValue = generatedValueEncoded
+            , genOperation = generatedOperationEncoded
+            } -> case decode' generatedValueEncoded of
+            Nothing -> do
+              encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedValueEncoded
+              error $ "Couldn't parse generated value: " ++ show generatedValueEncoded
+            Just generatedValue -> case decodeOp' generatedOperationEncoded of
+              Nothing -> do
+                encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedOperationEncoded
+                error $ "Couldn't parse generated operation: " ++ show generatedOperationEncoded
+              Just generatedOperation -> do
+                encodeAndSend $ makeOp topic $ Operated $ encode' $ perform' generatedOperation generatedValue
+                generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState
+          _ -> error $ "Broken internally. Expected generated, received: " ++ show shouldBeGenerated
+    _ -> error $ "Broken internally. Expected generating, received: " ++ show shouldBeGenerating
+
+badTopicError :: forall q. Topic -> Topic -> q
+badTopicError topic badTopic = error $ "Broken internally. Wrong topic - expected: " ++ show topic ++ ", received: " ++ show badTopic
