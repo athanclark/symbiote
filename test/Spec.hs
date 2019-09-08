@@ -12,7 +12,7 @@ import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), EitherOp
   , First, Second, simpleTest)
 import Test.QuickCheck (Arbitrary (..))
-import Test.QuickCheck.Gen (elements)
+import Test.QuickCheck.Gen (elements, oneof)
 
 import Data.Proxy (Proxy (..))
 
@@ -30,6 +30,7 @@ tests = testGroup "All Tests"
     simpleTests = testGroup "Simple Tests"
       [ testCase "Unit over id" (simpleTest unitSuite)
       , testCase "Int over various" (simpleTest intSuite)
+      , testCase "Double over various" (simpleTest doubleSuite)
       , testCase "List over various" (simpleTest listSuite)
       ]
       where
@@ -37,6 +38,8 @@ tests = testGroup "All Tests"
         unitSuite = register "Unit" 100 (Proxy :: Proxy ())
         intSuite :: SymbioteT (EitherOp Int) IO ()
         intSuite = register "Int" 100 (Proxy :: Proxy Int)
+        doubleSuite :: SymbioteT (EitherOp Double) IO ()
+        doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
         listSuite :: SymbioteT (EitherOp [Int]) IO ()
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
 
@@ -49,20 +52,49 @@ instance Arbitrary (Operation ()) where
 
 instance SymbioteOperation Int where
   data Operation Int
-    = Add5Int
-    | Sub5Int
-    | Div2Int
-    | Mul2Int
-    | Mod12Int
+    = AddInt Int
+    | SubInt Int
+    | DivInt Int
+    | MulInt Int
+    | ModInt Int
   perform op x = case op of
-    Add5Int -> x + 5
-    Sub5Int -> x - 5
-    Div2Int -> x `div` 2
-    Mul2Int -> x * 2
-    Mod12Int -> x `mod` 12
+    AddInt y -> x + y
+    SubInt y -> x - y
+    DivInt y -> if y == 0 then 0 else x `div` y
+    MulInt y -> x * y
+    ModInt y -> if y == 0 then 0 else x `mod` y
 deriving instance Show (Operation Int)
 instance Arbitrary (Operation Int) where
-  arbitrary = elements [Add5Int, Sub5Int, Div2Int, Mul2Int, Mod12Int]
+  arbitrary = oneof
+    [ AddInt <$> arbitrary
+    , SubInt <$> arbitrary
+    , DivInt <$> arbitrary
+    , MulInt <$> arbitrary
+    , ModInt <$> arbitrary
+    ]
+
+instance SymbioteOperation Double where
+  data Operation Double
+    = AddDouble Double
+    | SubDouble Double
+    | DivDouble Double
+    | MulDouble Double
+    | RecipDouble
+  perform op x = case op of
+    AddDouble y -> x + y
+    SubDouble y -> x - y
+    DivDouble y -> if y == 0.0 then 0.0 else x / y
+    MulDouble y -> x * y
+    RecipDouble -> if x == 0.0 then 0.0 else recip x
+deriving instance Show (Operation Double)
+instance Arbitrary (Operation Double) where
+  arbitrary = oneof
+    [ AddDouble <$> arbitrary
+    , SubDouble <$> arbitrary
+    , DivDouble <$> arbitrary
+    , MulDouble <$> arbitrary
+    , pure RecipDouble
+    ]
 
 instance SymbioteOperation [a] where
   data Operation [a]
