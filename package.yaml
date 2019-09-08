@@ -21,7 +21,10 @@ description:         Please see the README on GitHub at <https://github.com/atha
 
 dependencies:
 - base >= 4.7 && < 5
+- aeson
 - async
+- bytestring
+- cereal
 - containers
 - monad-control
 - mtl
@@ -44,6 +47,7 @@ tests:
     - symbiote
     - aeson
     - bytestring
+    - cereal
     - stm
     - tasty
     - tasty-hunit

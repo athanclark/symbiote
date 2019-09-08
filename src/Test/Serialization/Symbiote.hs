@@ -211,7 +211,7 @@ data Generating s
     }
   | BadResult s -- ^ Expected value
   | YourTurn
-  | ImFinished -- FIXME once first is finished, it goes into operating, then tries again, but is still finished - will 2nd go into operating after finished?
+  | ImFinished
   | GeneratingNoParseOperated s
   deriving (Eq, Show)
 
