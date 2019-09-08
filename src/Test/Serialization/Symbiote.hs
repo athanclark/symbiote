@@ -619,9 +619,8 @@ operating
 -- | Prints to stdout and uses a local channel for a sanity-check - doesn't serialize.
 simpleTest :: MonadBaseControl IO m
            => MonadIO m
-           => Show a
-           => Show (Operation a)
-           => SymbioteT (EitherOp a) m () -> m ()
+           => Show s
+           => SymbioteT s m () -> m ()
 simpleTest suite = do
   firstChan <- liftIO $ atomically newTChan
   secondChan <- liftIO $ atomically newTChan

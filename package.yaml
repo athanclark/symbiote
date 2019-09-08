@@ -42,7 +42,10 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - symbiote
+    - aeson
+    - bytestring
     - stm
     - tasty
     - tasty-hunit
     - QuickCheck
+    - quickcheck-instances

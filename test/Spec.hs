@@ -12,9 +12,13 @@ import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), EitherOp
   , First, Second, simpleTest)
 import Test.QuickCheck (Arbitrary (..))
-import Test.QuickCheck.Gen (elements, oneof)
+import Test.QuickCheck.Gen (elements, oneof, scale, getSize)
+import Test.QuickCheck.Instances ()
 
 import Data.Proxy (Proxy (..))
+import qualified Data.Aeson as Json
+import qualified Data.Aeson.Types as Json
+import Data.ByteString.Lazy (ByteString)
 
 
 main :: IO ()
@@ -24,6 +28,7 @@ main = defaultMain tests
 tests :: TestTree
 tests = testGroup "All Tests"
   [ simpleTests
+  , bytestringTests
   ]
   where
     simpleTests :: TestTree
@@ -42,6 +47,13 @@ tests = testGroup "All Tests"
         doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
         listSuite :: SymbioteT (EitherOp [Int]) IO ()
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
+    bytestringTests :: TestTree
+    bytestringTests = testGroup "ByteString Tests"
+      [ testCase "Json over id" (simpleTest jsonSuite)
+      ]
+      where
+        jsonSuite :: SymbioteT ByteString IO ()
+        jsonSuite = register "Json" 100 (Proxy :: Proxy Json.Value)
 
 instance SymbioteOperation () where
   data Operation () = UnitId
@@ -108,3 +120,30 @@ instance SymbioteOperation [a] where
 deriving instance Show (Operation [a])
 instance Arbitrary (Operation [a]) where
   arbitrary = elements [ReverseList, InitList, TailList]
+
+instance SymbioteOperation Json.Value where
+  data Operation Json.Value = JsonId
+  perform _ x = x
+deriving instance Show (Operation Json.Value)
+instance Arbitrary (Operation Json.Value) where
+  arbitrary = pure JsonId
+instance Symbiote Json.Value ByteString where
+  encode = Json.encode
+  decode = Json.decode
+  encodeOp _ = "id"
+  decodeOp x | x == "id" = Just JsonId
+             | otherwise = Nothing
+instance Arbitrary Json.Value where
+  arbitrary = do
+    s <- getSize
+    if s <= 1
+      then oneof
+            [ pure Json.Null
+            , Json.Bool <$> arbitrary
+            , Json.Number <$> arbitrary
+            ]
+      else oneof
+            [ Json.String <$> scale (`div` 2) arbitrary
+            , Json.Array <$> scale (`div` 2) arbitrary
+            , Json.Object <$> scale (`div` 2) arbitrary
+            ]
