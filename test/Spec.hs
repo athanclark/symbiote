@@ -2,7 +2,6 @@
     OverloadedStrings
   , MultiParamTypeClasses
   , TypeFamilies
-  , TypeSynonymInstances
   , FlexibleInstances
   , StandaloneDeriving
   #-}
@@ -11,12 +10,11 @@ import Test.Tasty (defaultMain, testGroup, TestTree)
 import Test.Tasty.HUnit (testCase)
 import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), EitherOp
-  , First, Second, defaultSuccess, nullProgress, defaultFailure)
+  , First, Second, simpleTest)
 import Test.QuickCheck (Arbitrary (..))
+import Test.QuickCheck.Gen (elements)
 
 import Data.Proxy (Proxy (..))
-import Control.Concurrent.STM (TChan, newTChan, readTChan, writeTChan, atomically)
-import Control.Concurrent.Async (async, wait)
 
 
 main :: IO ()
@@ -25,63 +23,41 @@ main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "All Tests"
-  [ testGroup "Simple Tests"
-    [ testCase "Unit over id" unitOverId
-    ]
+  [ simpleTests
   ]
   where
-    unitOverId :: IO ()
-    unitOverId = do
-      firstChan <- atomically newTChan
-      secondChan <- atomically newTChan
-
-      t <- async $
-        firstPeer
-          (encodeAndSendChanFirst firstChan)
-          (receiveAndDecodeChanSecond secondChan)
-          defaultSuccess defaultFailure nullProgress
-          suite
-      secondPeer
-        (encodeAndSendChanSecond secondChan)
-        (receiveAndDecodeChanFirst firstChan)
-        defaultSuccess defaultFailure nullProgress
-        suite
-      wait t
-
+    simpleTests :: TestTree
+    simpleTests = testGroup "Simple Tests"
+      [ testCase "Unit over id" (simpleTest unitSuite)
+      , testCase "Int over various" (simpleTest intSuite)
+      ]
       where
-        suite :: SymbioteT (EitherOp ()) IO ()
-        suite = register "Unit" 100 (Proxy :: Proxy ())
-
-
-encodeAndSendChanFirst :: Show s => TChan (First s) -> First s -> IO ()
-encodeAndSendChanFirst chan x = atomically (writeTChan chan x)
-
-encodeAndSendChanSecond :: Show s => TChan (Second s) -> Second s -> IO ()
-encodeAndSendChanSecond chan x = atomically (writeTChan chan x)
-
-receiveAndDecodeChanFirst :: Show s => TChan (First s) -> IO (First s)
-receiveAndDecodeChanFirst chan = atomically (readTChan chan)
-
-receiveAndDecodeChanSecond :: Show s => TChan (Second s) -> IO (Second s)
-receiveAndDecodeChanSecond chan = atomically (readTChan chan)
-
-
+        unitSuite :: SymbioteT (EitherOp ()) IO ()
+        unitSuite = register "Unit" 100 (Proxy :: Proxy ())
+        intSuite :: SymbioteT (EitherOp Int) IO ()
+        intSuite = register "Int" 100 (Proxy :: Proxy Int)
 
 instance SymbioteOperation () where
   data Operation () = UnitId
   perform UnitId () = ()
-
-instance Symbiote () (EitherOp ()) where
-  encode = Left
-  decode (Left x) = Just x
-  decode (Right _) = Nothing
-  encodeOp = Right
-  decodeOp (Left _) = Nothing
-  decodeOp (Right x) = Just x
-
 deriving instance Show (Operation ())
 instance Arbitrary (Operation ()) where
   arbitrary = pure UnitId
 
--- instance Show (Operation ()) where
---   show
+
+instance SymbioteOperation Int where
+  data Operation Int
+    = Add5Int
+    | Sub5Int
+    | Div2Int
+    | Mul2Int
+    | Mod12Int
+  perform op x = case op of
+    Add5Int -> x + 5
+    Sub5Int -> x - 5
+    Div2Int -> x `div` 2
+    Mul2Int -> x * 2
+    Mod12Int -> x `mod` 12
+deriving instance Show (Operation Int)
+instance Arbitrary (Operation Int) where
+  arbitrary = elements [Add5Int, Sub5Int, Div2Int, Mul2Int, Mod12Int]

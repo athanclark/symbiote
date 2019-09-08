@@ -7,6 +7,9 @@
   , NamedFieldPuns
   , FlexibleContexts
   , GeneralizedNewtypeDeriving
+  , StandaloneDeriving
+  , UndecidableInstances
+  , FlexibleInstances
   #-}
 
 {-|
@@ -32,9 +35,9 @@ where the left invocation of f occurs in peer A, and the right invocation occurs
 -}
 
 module Test.Serialization.Symbiote
-  ( SymbioteOperation (..), Symbiote (..), EitherOp, Topic, SymbioteT, register
+  ( SymbioteOperation (..), Symbiote (..), EitherOp (..), Topic, SymbioteT, register
   , firstPeer, secondPeer, First (..), Second (..), Generating (..), Operating (..), Failure (..)
-  , defaultSuccess, defaultFailure, defaultProgress, nullProgress
+  , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest
   ) where
 
 import Data.Map (Map)
@@ -45,8 +48,11 @@ import Data.Text (Text, unpack)
 import Data.String (IsString)
 import Data.Proxy (Proxy (..))
 import Text.Printf (printf)
-import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', writeTVar, atomically)
-import Control.Monad (forever)
+import Control.Concurrent.STM
+  (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', writeTVar, atomically, newTChan, readTChan, writeTChan)
+import Control.Concurrent.Async (async, wait)
+import Control.Monad (forever, void)
+import Control.Monad.Trans.Control (MonadBaseControl, liftBaseWith)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.State (StateT, modify', execStateT)
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -68,8 +74,17 @@ class SymbioteOperation a => Symbiote a s where
 
 
 -- | The most trivial serialization medium for any @a@.
-type EitherOp a = Either a (Operation a)
+newtype EitherOp a = EitherOp (Either a (Operation a))
+deriving instance (Eq a, Eq (Operation a)) => Eq (EitherOp a)
+deriving instance (Show a, Show (Operation a)) => Show (EitherOp a)
 
+instance SymbioteOperation a => Symbiote a (EitherOp a) where
+  encode = EitherOp . Left
+  decode (EitherOp (Left x)) = Just x
+  decode (EitherOp (Right _)) = Nothing
+  encodeOp = EitherOp . Right
+  decodeOp (EitherOp (Left _)) = Nothing
+  decodeOp (EitherOp (Right x)) = Just x
 
 -- | Unique name of a type, for a suite of tests
 newtype Topic = Topic Text
@@ -599,3 +614,30 @@ operating
             onFailure
             onProgress
             topic symbioteState
+
+
+-- | Prints to stdout and uses a local channel for a sanity-check - doesn't serialize.
+simpleTest :: MonadBaseControl IO m
+           => MonadIO m
+           => Show a
+           => Show (Operation a)
+           => SymbioteT (EitherOp a) m () -> m ()
+simpleTest suite = do
+  firstChan <- liftIO $ atomically newTChan
+  secondChan <- liftIO $ atomically newTChan
+
+  t <- liftBaseWith $ \runInBase -> async $
+    void $ runInBase $ firstPeer
+      (encodeAndSendChan firstChan)
+      (receiveAndDecodeChan secondChan)
+      (liftIO . defaultSuccess) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+      suite
+  secondPeer
+    (encodeAndSendChan secondChan)
+    (receiveAndDecodeChan firstChan)
+    (liftIO . defaultSuccess) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+    suite
+  liftIO (wait t)
+  where
+    encodeAndSendChan chan x = liftIO $ atomically (writeTChan chan x)
+    receiveAndDecodeChan chan = liftIO $ atomically (readTChan chan)

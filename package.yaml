@@ -21,7 +21,9 @@ description:         Please see the README on GitHub at <https://github.com/atha
 
 dependencies:
 - base >= 4.7 && < 5
+- async
 - containers
+- monad-control
 - mtl
 - stm
 - text
@@ -40,7 +42,6 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - symbiote
-    - async
     - stm
     - tasty
     - tasty-hunit
