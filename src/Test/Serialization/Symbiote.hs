@@ -130,8 +130,8 @@ data GenerateSymbiote s
     }
 
 
-generateSymbiote :: forall s m. MonadIO m => SymbioteState s -> Topic -> m (GenerateSymbiote s)
-generateSymbiote SymbioteState{generate,generateOp,maxSize,generation} topic = do
+generateSymbiote :: forall s m. MonadIO m => SymbioteState s -> m (GenerateSymbiote s)
+generateSymbiote SymbioteState{generate,generateOp,maxSize,generation} = do
   let go g@SymbioteGeneration{size} = g {size = size + 1}
   SymbioteGeneration{size} <- liftIO $ atomically $ modifyTVar' generation go *> readTVar generation
   if size >= maxSize
@@ -180,6 +180,7 @@ data Generating s
     }
   | BadResult s -- ^ Expected value
   | YourTurn
+  | ImFinished -- FIXME once first is finished, it goes into operating, then tries again, but is still finished - will 2nd go into operating after finished?
   | GeneratingNoParseOperated s
   deriving (Eq, Show)
 
@@ -203,6 +204,17 @@ data First s
     }
   deriving (Eq, Show)
 
+getFirstGenerating :: First s -> Maybe (Topic, Generating s)
+getFirstGenerating x = case x of
+  FirstGenerating topic g -> Just (topic, g)
+  _ -> Nothing
+
+getFirstOperating :: First s -> Maybe (Topic, Operating s)
+getFirstOperating x = case x of
+  FirstOperating topic g -> Just (topic, g)
+  _ -> Nothing
+
+
 -- | Messages sent by the second peer
 data Second s
   = BadTopics (Map Topic Int) -- ^ Second's available topics with identical gen sizes
@@ -216,6 +228,16 @@ data Second s
     , secondGenerating :: Generating s
     }
   deriving (Eq, Show)
+
+getSecondGenerating :: Second s -> Maybe (Topic, Generating s)
+getSecondGenerating x = case x of
+  SecondGenerating topic g -> Just (topic, g)
+  _ -> Nothing
+
+getSecondOperating :: Second s -> Maybe (Topic, Operating s)
+getSecondOperating x = case x of
+  SecondOperating topic g -> Just (topic, g)
+  _ -> Nothing
 
 
 firstPeer :: forall m s
@@ -235,14 +257,25 @@ firstPeer encodeAndSend receiveAndDecode x = do
       error $ "Bad topics - available topics: " ++ show topics ++ ", bad topics: " ++ show badTopics
     Start -> do
       topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
-      mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
-      case mTopicToProcess of
-        Nothing -> pure () -- done?
-        Just (topic, newTopics) -> do
-          liftIO (atomically (writeTVar topicsToProcess newTopics))
-          case Map.lookup topic state of
-            Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
-            Just symbioteState -> generating encodeAndSend receiveAndDecode FirstGenerating FirstOperating (\(SecondGenerating t g) -> (t,g)) (\(SecondOperating t o) -> (t,o)) topic symbioteState
+      let processAllTopics = do
+            mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
+            case mTopicToProcess of
+              Nothing -> liftIO $ putStrLn "All topics processed" -- pure () -- done?
+              Just (topic, newTopics) -> do
+                liftIO (atomically (writeTVar topicsToProcess newTopics))
+                case Map.lookup topic state of
+                  Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
+                  Just symbioteState -> do
+                    hasSentFinishedVar <- liftIO $ newTVarIO HasntSentFinished
+                    hasReceivedFinishedVar <- liftIO $ newTVarIO HasntReceivedFinished
+                    generating
+                      encodeAndSend receiveAndDecode
+                      FirstGenerating FirstOperating
+                      getSecondGenerating getSecondOperating
+                      hasSentFinishedVar hasReceivedFinishedVar
+                      processAllTopics
+                      topic symbioteState
+      processAllTopics
     _ -> error $ "Broken internally. Message received: " ++ show shouldBeStart
 
 
@@ -265,16 +298,44 @@ secondPeer encodeAndSend receiveAndDecode x = do
           -- kill self :(
         else do
           encodeAndSend Start
-          let loop = forever $ do
-                next <- receiveAndDecode
-                case next of
-                  AvailableTopics _ ->
-                    error $ "Broken internally. Message received: " ++ show next
-                  FirstGenerating {firstGeneratingTopic,firstGenerating} -> undefined
-                  FirstOperating {firstOperatingTopic,firstOperating} -> undefined
-          loop
+          topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
+          let processAllTopics = do
+                mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
+                case mTopicToProcess of
+                  Nothing -> liftIO $ putStrLn "All topics processed" -- pure () -- done?
+                  Just (topic, newTopics) -> do
+                    liftIO (atomically (writeTVar topicsToProcess newTopics))
+                    case Map.lookup topic state of
+                      Nothing -> error $ "Broken internally, topic " ++ show topic ++ " does not exist."
+                      Just symbioteState -> do
+                        hasSentFinishedVar <- liftIO $ newTVarIO HasntSentFinished
+                        hasReceivedFinishedVar <- liftIO $ newTVarIO HasntReceivedFinished
+                        operating
+                          encodeAndSend receiveAndDecode
+                          SecondGenerating SecondOperating
+                          getFirstGenerating getFirstOperating
+                          hasSentFinishedVar hasReceivedFinishedVar
+                          processAllTopics
+                          topic symbioteState
+          processAllTopics
+          -- let loop = forever $ do
+          --       next <- receiveAndDecode
+          --       case next of
+          --         AvailableTopics _ ->
+          --           error $ "Broken internally. Message received: " ++ show next
+          --         FirstGenerating {firstGeneratingTopic,firstGenerating} -> undefined
+          --         FirstOperating {firstOperatingTopic,firstOperating} -> undefined
+          -- loop
     _ -> undefined -- something's broken internally
 
+
+data HasSentFinished
+  = HasSentFinished
+  | HasntSentFinished
+
+data HasReceivedFinished
+  = HasReceivedFinished
+  | HasntReceivedFinished
 
 
 generating :: MonadIO m
@@ -283,26 +344,42 @@ generating :: MonadIO m
            -> (m (them s)) -- ^ Receive and decode second messages
            -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
            -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
-           -> (them s -> (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
-           -> (them s -> (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> (them s -> Maybe (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> (them s -> Maybe (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> TVar HasSentFinished
+           -> TVar HasReceivedFinished
+           -> m () -- ^ on finished
            -> Topic
            -> SymbioteState s
            -> m ()
-generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState@SymbioteState{equal} = do
-  mGenerated <- generateSymbiote symbioteState topic
+generating
+  encodeAndSend receiveAndDecode
+  makeGen makeOp
+  getGen getOp
+  hasSentFinishedVar hasReceivedFinishedVar
+  onFinished
+  topic symbioteState@SymbioteState{equal} = do
+  mGenerated <- generateSymbiote symbioteState
   case mGenerated of
-    DoneGenerating -> liftIO $ putStrLn $ "Finished topic " ++ show topic
+    DoneGenerating -> do
+      encodeAndSend $ makeGen topic ImFinished
+      liftIO $ do
+        atomically $ writeTVar hasSentFinishedVar HasSentFinished
+        putStrLn $ "Finished topic " ++ show topic
+      operatingTryFinished
     GeneratedSymbiote
       { generatedValue = generatedValueEncoded
       , generatedOperation = generatedOperationEncoded
       } -> do
+      -- send
       encodeAndSend $ makeGen topic $ Generated
         { genValue = generatedValueEncoded
         , genOperation = generatedOperationEncoded
         }
+      -- receive
       shouldBeOperating <- getOp <$> receiveAndDecode
       case shouldBeOperating of
-        (secondOperatingTopic, shouldBeOperated)
+        Just (secondOperatingTopic, shouldBeOperated)
           | secondOperatingTopic /= topic -> badTopicError topic secondOperatingTopic
           | otherwise -> case shouldBeOperated of
               Operated operatedValueEncoded -> case decode operatedValueEncoded of
@@ -314,13 +391,20 @@ generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symb
                   Just generatedValue -> case decodeOp generatedOperationEncoded of
                     Nothing -> error $ "Broken internally - couldn't decode encoded local operation: " ++ show generatedOperationEncoded
                     Just generatedOperation ->
+                      -- decoded operated value, generated value & operation
                       if equal (perform generatedOperation generatedValue) operatedValue
                         then do
-                          encodeAndSend $ makeGen topic YourTurn -- FIXME receive then loop
-                          operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState
+                          encodeAndSend $ makeGen topic YourTurn
+                          operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp hasSentFinishedVar hasReceivedFinishedVar onFinished topic symbioteState
                         else encodeAndSend $ makeGen topic $ BadResult operatedValueEncoded
               _ -> error $ "Broken internally - something couldn't parse. Received: " ++ show shouldBeOperated
         _ -> error $ "Broken internally. Expected operating, received: " ++ show shouldBeOperating
+  where
+    operatingTryFinished = do
+      hasReceivedFinished <- liftIO $ readTVarIO hasReceivedFinishedVar
+      case hasReceivedFinished of
+        HasReceivedFinished -> onFinished -- stop cycling - last generation in sequence is from second
+        HasntReceivedFinished -> operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp hasSentFinishedVar hasReceivedFinishedVar onFinished topic symbioteState
 
 operating :: MonadIO m
           => Show s
@@ -328,17 +412,30 @@ operating :: MonadIO m
           -> (m (them s)) -- ^ Receive and decode second messages
           -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
           -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
-          -> (them s -> (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
-          -> (them s -> (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+          -> (them s -> Maybe (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
+          -> (them s -> Maybe (Topic, Operating s)) -- ^ Deconstruct an operating datum, whether first or second
+           -> TVar HasSentFinished
+           -> TVar HasReceivedFinished
+           -> m () -- ^ on finished
           -> Topic
           -> SymbioteState s
           -> m ()
-operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState@SymbioteState{decode',decodeOp',perform',encode'} = do
+operating
+  encodeAndSend receiveAndDecode
+  makeGen makeOp
+  getGen getOp
+  hasSentFinishedVar hasReceivedFinishedVar
+  onFinished
+  topic symbioteState@SymbioteState{decode',decodeOp',perform',encode'} = do
   shouldBeGenerating <- getGen <$> receiveAndDecode
   case shouldBeGenerating of
-    (secondGeneratingTopic,shouldBeGenerated)
+    Just (secondGeneratingTopic,shouldBeGenerated)
       | secondGeneratingTopic /= topic -> badTopicError topic secondGeneratingTopic
       | otherwise -> case shouldBeGenerated of
+          ImFinished -> do
+            liftIO $ atomically $ writeTVar hasReceivedFinishedVar HasReceivedFinished
+            generatingTryFinished
+          YourTurn -> generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp hasSentFinishedVar hasReceivedFinishedVar onFinished topic symbioteState
           Generated
             { genValue = generatedValueEncoded
             , genOperation = generatedOperationEncoded
@@ -350,11 +447,19 @@ operating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbi
               Nothing -> do
                 encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedOperationEncoded
                 error $ "Couldn't parse generated operation: " ++ show generatedOperationEncoded
-              Just generatedOperation -> do
+              Just generatedOperation ->
                 encodeAndSend $ makeOp topic $ Operated $ encode' $ perform' generatedOperation generatedValue
-                generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp topic symbioteState
+                -- wait for response
           _ -> error $ "Broken internally. Expected generated, received: " ++ show shouldBeGenerated
     _ -> error $ "Broken internally. Expected generating, received: " ++ show shouldBeGenerating
+  where
+    generatingTryFinished = do
+      hasSentFinished <- liftIO $ readTVarIO hasSentFinishedVar
+      case hasSentFinished of
+        HasSentFinished -> onFinished -- stop cycling - last operation in sequence is from first
+        HasntSentFinished -> generating encodeAndSend receiveAndDecode makeGen makeOp getGen getOp hasSentFinishedVar hasReceivedFinishedVar onFinished topic symbioteState
+
+-- TODO when either side has both sent and received a finished, then they're done
 
 badTopicError :: forall q. Topic -> Topic -> q
 badTopicError topic badTopic = error $ "Broken internally. Wrong topic - expected: " ++ show topic ++ ", received: " ++ show badTopic
