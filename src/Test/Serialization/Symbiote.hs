@@ -630,12 +630,12 @@ simpleTest suite = do
     void $ runInBase $ firstPeer
       (encodeAndSendChan firstChan)
       (receiveAndDecodeChan secondChan)
-      (liftIO . defaultSuccess) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+      (const (pure ())) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
       suite
   secondPeer
     (encodeAndSendChan secondChan)
     (receiveAndDecodeChan firstChan)
-    (liftIO . defaultSuccess) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+    (const (pure ())) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
     suite
   liftIO (wait t)
   where
