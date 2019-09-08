@@ -11,7 +11,7 @@ import Test.Tasty (defaultMain, testGroup, TestTree)
 import Test.Tasty.HUnit (testCase)
 import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), EitherOp
-  , First, Second)
+  , First, Second, defaultSuccess, nullProgress, defaultFailure)
 import Test.QuickCheck (Arbitrary (..))
 
 import Data.Proxy (Proxy (..))
@@ -35,8 +35,17 @@ tests = testGroup "All Tests"
       firstChan <- atomically newTChan
       secondChan <- atomically newTChan
 
-      t <- async $ firstPeer (encodeAndSendChanFirst firstChan) (receiveAndDecodeChanSecond secondChan) suite
-      secondPeer (encodeAndSendChanSecond secondChan) (receiveAndDecodeChanFirst firstChan) suite
+      t <- async $
+        firstPeer
+          (encodeAndSendChanFirst firstChan)
+          (receiveAndDecodeChanSecond secondChan)
+          defaultSuccess defaultFailure nullProgress
+          suite
+      secondPeer
+        (encodeAndSendChanSecond secondChan)
+        (receiveAndDecodeChanFirst firstChan)
+        defaultSuccess defaultFailure nullProgress
+        suite
       wait t
 
       where
@@ -45,28 +54,16 @@ tests = testGroup "All Tests"
 
 
 encodeAndSendChanFirst :: Show s => TChan (First s) -> First s -> IO ()
-encodeAndSendChanFirst chan x = do
-  putStrLn $ "Sending first... " ++ show x
-  atomically (writeTChan chan x)
+encodeAndSendChanFirst chan x = atomically (writeTChan chan x)
 
 encodeAndSendChanSecond :: Show s => TChan (Second s) -> Second s -> IO ()
-encodeAndSendChanSecond chan x = do
-  putStrLn $ "Sending second... " ++ show x
-  atomically (writeTChan chan x)
+encodeAndSendChanSecond chan x = atomically (writeTChan chan x)
 
 receiveAndDecodeChanFirst :: Show s => TChan (First s) -> IO (First s)
-receiveAndDecodeChanFirst chan = do
-  putStrLn "Receiving first... "
-  x <- atomically (readTChan chan)
-  putStrLn $ "Received first... " ++ show x
-  pure x
+receiveAndDecodeChanFirst chan = atomically (readTChan chan)
 
 receiveAndDecodeChanSecond :: Show s => TChan (Second s) -> IO (Second s)
-receiveAndDecodeChanSecond chan = do
-  putStrLn "Receiving second... "
-  x <- atomically (readTChan chan)
-  putStrLn $ "Received second... " ++ show x
-  pure x
+receiveAndDecodeChanSecond chan = atomically (readTChan chan)
 
 
 

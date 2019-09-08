@@ -34,15 +34,17 @@ where the left invocation of f occurs in peer A, and the right invocation occurs
 module Test.Serialization.Symbiote
   ( SymbioteOperation (..), Symbiote (..), EitherOp, Topic, SymbioteT, register
   , firstPeer, secondPeer, First (..), Second (..), Generating (..), Operating (..), Failure (..)
+  , defaultSuccess, defaultFailure, defaultProgress, nullProgress
   ) where
 
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import Data.String (IsString)
 import Data.Proxy (Proxy (..))
+import Text.Printf (printf)
 import Control.Concurrent.STM (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', writeTVar, atomically)
 import Control.Monad (forever)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
@@ -266,19 +268,37 @@ data Failure them s
     { wrongTopicExpected :: Topic
     , wrongTopicGot :: Topic
     }
-  | CantParseOperated s
-  | CantParseGeneratedValue s
-  | CantParseGeneratedOperation s
-  | CantParseLocalValue s
-  | CantParseLocalOperation s
-  | BadOperating (Operating s)
-  | BadGenerating (Generating s)
-  | BadThem (them s)
+  | CantParseOperated Topic s
+  | CantParseGeneratedValue Topic s
+  | CantParseGeneratedOperation Topic s
+  | CantParseLocalValue Topic s
+  | CantParseLocalOperation Topic s
+  | BadOperating Topic (Operating s)
+  | BadGenerating Topic (Generating s)
+  | BadThem Topic (them s)
   | SafeFailure
-    { safeFailureExpected :: s
+    { safeFailureTopic :: Topic
+    , safeFailureExpected :: s
     , safeFailureGot :: s
     }
   deriving (Eq, Show)
+
+
+-- | Via putStrLn
+defaultSuccess :: Topic -> IO ()
+defaultSuccess (Topic t) = putStrLn $ "Topic " ++ unpack t ++ " succeeded"
+
+-- | Via putStrLn
+defaultFailure :: Show (them s) => Show s => Failure them s -> IO ()
+defaultFailure f = error $ "Failure: " ++ show f
+
+-- | Via putStrLn
+defaultProgress :: Topic -> Float -> IO ()
+defaultProgress (Topic t) p = putStrLn $ "Topic " ++ unpack t ++ ": " ++ (printf "%.2f" (p * 100.0)) ++ "%"
+
+-- | Do nothing
+nullProgress :: Topic -> Float -> IO ()
+nullProgress _ _ = pure ()
 
 
 firstPeer :: forall m s
@@ -434,11 +454,11 @@ generating
               Operated operatedValueEncoded -> case decode operatedValueEncoded of
                 Nothing -> do
                   encodeAndSend $ makeGen topic $ GeneratingNoParseOperated operatedValueEncoded
-                  onFailure $ CantParseOperated operatedValueEncoded
+                  onFailure $ CantParseOperated topic operatedValueEncoded
                 Just operatedValue -> case decode generatedValueEncoded of
-                  Nothing -> onFailure $ CantParseLocalValue generatedValueEncoded
+                  Nothing -> onFailure $ CantParseLocalValue topic generatedValueEncoded
                   Just generatedValue -> case decodeOp generatedOperationEncoded of
-                    Nothing -> onFailure $ CantParseLocalOperation generatedOperationEncoded
+                    Nothing -> onFailure $ CantParseLocalOperation topic generatedOperationEncoded
                     Just generatedOperation -> do
                       -- decoded operated value, generated value & operation
                       let expected = perform generatedOperation generatedValue
@@ -459,9 +479,9 @@ generating
                             topic symbioteState
                         else do
                           encodeAndSend $ makeGen topic $ BadResult operatedValueEncoded
-                          onFailure $ SafeFailure (encode' expected) operatedValueEncoded
-              _ -> onFailure $ BadOperating shouldBeOperated
-        _ -> onFailure $ BadThem shouldBeOperating
+                          onFailure $ SafeFailure topic (encode' expected) operatedValueEncoded
+              _ -> onFailure $ BadOperating topic shouldBeOperated
+        _ -> onFailure $ BadThem topic shouldBeOperating
   where
     operatingTryFinished = do
       hasReceivedFinished <- liftIO $ readTVarIO hasReceivedFinishedVar
@@ -538,11 +558,11 @@ operating
             } -> case decode' generatedValueEncoded of
             Nothing -> do
               encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedValueEncoded
-              onFailure $ CantParseGeneratedValue generatedValueEncoded
+              onFailure $ CantParseGeneratedValue topic generatedValueEncoded
             Just generatedValue -> case decodeOp' generatedOperationEncoded of
               Nothing -> do
                 encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedOperationEncoded
-                onFailure $ CantParseGeneratedOperation generatedOperationEncoded
+                onFailure $ CantParseGeneratedOperation topic generatedOperationEncoded
               Just generatedOperation -> do
                 encodeAndSend $ makeOp topic $ Operated $ encode' $ perform' generatedOperation generatedValue
                 -- wait for response
@@ -557,8 +577,8 @@ operating
                   onFailure
                   onProgress
                   topic symbioteState
-          _ -> onFailure $ BadGenerating shouldBeGenerated
-    _ -> onFailure $ BadThem shouldBeGenerating
+          _ -> onFailure $ BadGenerating topic shouldBeGenerated
+    _ -> onFailure $ BadThem topic shouldBeGenerating
   where
     generatingTryFinished = do
       hasSentFinished <- liftIO $ readTVarIO hasSentFinishedVar
