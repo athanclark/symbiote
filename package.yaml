@@ -40,3 +40,8 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - symbiote
+    - async
+    - stm
+    - tasty
+    - tasty-hunit
+    - QuickCheck
