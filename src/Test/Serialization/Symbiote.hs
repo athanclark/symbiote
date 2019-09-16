@@ -6,7 +6,6 @@
   , ScopedTypeVariables
   , NamedFieldPuns
   , FlexibleContexts
-  , GeneralizedNewtypeDeriving
   , StandaloneDeriving
   , UndecidableInstances
   , FlexibleInstances
@@ -40,37 +39,25 @@ module Test.Serialization.Symbiote
   , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest
   ) where
 
+import Test.Serialization.Symbiote.Core
+  ( Topic (..), newGeneration, SymbioteState (..), SymbioteT, runSymbioteT
+  , GenerateSymbiote (..), generateSymbiote, getProgress, Symbiote (..), SymbioteOperation (..))
+
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text (Text, unpack)
-import Data.String (IsString)
+import Data.Text (unpack)
 import Data.Proxy (Proxy (..))
 import Text.Printf (printf)
 import Control.Concurrent.STM
-  (TVar, newTVarIO, readTVar, readTVarIO, modifyTVar', writeTVar, atomically, newTChan, readTChan, writeTChan)
+  (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
 import Control.Concurrent.Async (async, wait)
-import Control.Monad (forever, void)
+import Control.Monad (void)
 import Control.Monad.Trans.Control (MonadBaseControl, liftBaseWith)
-import Control.Monad.Reader (ReaderT, ask, runReaderT)
-import Control.Monad.State (StateT, modify', execStateT)
+import Control.Monad.State (modify')
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import Test.QuickCheck.Gen (Gen, resize)
-import qualified Test.QuickCheck.Gen as QC
-
-
-class SymbioteOperation a where
-  data Operation a :: *
-  perform :: Operation a -> a -> a
-
--- | A type and operation set over a serialization format
-class SymbioteOperation a => Symbiote a s where
-  encode   :: a -> s
-  decode   :: s -> Maybe a
-  encodeOp :: Operation a -> s
-  decodeOp :: s -> Maybe (Operation a)
+import Test.QuickCheck.Gen (Gen)
 
 
 -- | The most trivial serialization medium for any @a@.
@@ -85,94 +72,6 @@ instance SymbioteOperation a => Symbiote a (EitherOp a) where
   encodeOp = EitherOp . Right
   decodeOp (EitherOp (Left _)) = Nothing
   decodeOp (EitherOp (Right x)) = Just x
-
--- | Unique name of a type, for a suite of tests
-newtype Topic = Topic Text
-  deriving (Eq, Ord, Show, IsString)
-
--- | Protocol state for a particular topic
-data SymbioteProtocol a s
-  = MeGenerated
-    { meGenValue :: a
-    , meGenOperation :: Operation a
-    , meGenReceived :: Maybe s
-    }
-  | ThemGenerating
-    { themGen :: Maybe (s, s)
-    }
-  | NotStarted
-  | Finished
-
--- | Protocol generation state
-data SymbioteGeneration a s = SymbioteGeneration
-  { size     :: Int
-  , protocol :: SymbioteProtocol a s
-  }
-
-newGeneration :: SymbioteGeneration a s
-newGeneration = SymbioteGeneration
-  { size = 1
-  , protocol = NotStarted
-  }
-
-
--- | Internal existential state of a registered topic with type's facilities
-data SymbioteState s =
-  forall a
-  . ( Arbitrary a
-    , Arbitrary (Operation a)
-    , Symbiote a s
-    , Eq a
-    ) =>
-  SymbioteState
-  { generate   :: Gen a
-  , generateOp :: Gen (Operation a)
-  , equal      :: a -> a -> Bool
-  , maxSize    :: Int
-  , generation :: TVar (SymbioteGeneration a s)
-  , encode'    :: a -> s
-  , encodeOp'  :: Operation a -> s
-  , decode'    :: s -> Maybe a
-  , decodeOp'  :: s -> Maybe (Operation a)
-  , perform'   :: Operation a -> a -> a
-  }
-
-
-type SymbioteT s m = ReaderT Bool (StateT (Map Topic (SymbioteState s)) m)
-
-runSymbioteT :: Monad m
-             => SymbioteT s m ()
-             -> Bool -- ^ Is this the first peer to initiate the protocol?
-             -> m (Map Topic (SymbioteState s))
-runSymbioteT x isFirst = execStateT (runReaderT x isFirst) Map.empty
-
-
-data GenerateSymbiote s
-  = DoneGenerating
-  | GeneratedSymbiote
-    { generatedValue :: s
-    , generatedOperation :: s
-    }
-
-
-generateSymbiote :: forall s m. MonadIO m => SymbioteState s -> m (GenerateSymbiote s)
-generateSymbiote SymbioteState{generate,generateOp,maxSize,generation} = do
-  let go g@SymbioteGeneration{size} = g {size = size + 1}
-  SymbioteGeneration{size} <- liftIO $ atomically $ modifyTVar' generation go *> readTVar generation
-  if size >= maxSize
-    then pure DoneGenerating
-    else do
-      let genResize :: forall q. Gen q -> m q
-          genResize = liftIO . QC.generate . resize size
-      generatedValue <- encode <$> genResize generate
-      generatedOperation <- encodeOp <$> genResize generateOp
-      pure GeneratedSymbiote{generatedValue,generatedOperation}
-
-
-getProgress :: MonadIO m => SymbioteState s -> m Float
-getProgress SymbioteState{maxSize,generation} = do
-  SymbioteGeneration{size} <- liftIO $ readTVarIO generation
-  pure $ fromIntegral size / fromIntegral maxSize
 
 
 -- | Register a topic in the test suite
@@ -248,7 +147,7 @@ getFirstOperating x = case x of
 
 -- | Messages sent by the second peer
 data Second s
-  = BadTopics (Map Topic Int) -- ^ Second's available topics with identical gen sizes
+  = BadTopics (Map Topic Int)
   | Start
   | SecondOperating
     { secondOperatingTopic :: Topic
@@ -309,18 +208,19 @@ defaultFailure f = error $ "Failure: " ++ show f
 
 -- | Via putStrLn
 defaultProgress :: Topic -> Float -> IO ()
-defaultProgress (Topic t) p = putStrLn $ "Topic " ++ unpack t ++ ": " ++ (printf "%.2f" (p * 100.0)) ++ "%"
+defaultProgress (Topic t) p = putStrLn $ "Topic " ++ unpack t ++ ": " ++ printf "%.2f" (p * 100.0) ++ "%"
 
 -- | Do nothing
 nullProgress :: Topic -> Float -> IO ()
 nullProgress _ _ = pure ()
 
 
+-- | Run the test suite as the first peer
 firstPeer :: forall m s
            . MonadIO m
           => Show s
           => (First s -> m ()) -- ^ Encode and send first messages
-          -> (m (Second s)) -- ^ Receive and decode second messages
+          -> m (Second s) -- ^ Receive and decode second messages
           -> (Topic -> m ()) -- ^ Report when Successful
           -> (Failure Second s -> m ()) -- ^ Report when Failed
           -> (Topic -> Float -> m ()) -- ^ Report on Progress
@@ -360,11 +260,12 @@ firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
     _ -> onFailure $ OutOfSyncSecond shouldBeStart
 
 
+-- | Run the test suite as the second peer
 secondPeer :: forall s m
             . MonadIO m
            => Show s
            => (Second s -> m ()) -- ^ Encode and send second messages
-           -> (m (First s)) -- ^ Receive and decode first messages
+           -> m (First s) -- ^ Receive and decode first messages
            -> (Topic -> m ()) -- ^ Report when Successful
            -> (Failure First s -> m ()) -- ^ Report when Failed
            -> (Topic -> Float -> m ()) -- ^ Report on Progress
@@ -420,7 +321,7 @@ data HasReceivedFinished
 generating :: MonadIO m
            => Show s
            => (me s -> m ()) -- ^ Encode and send first messages
-           -> (m (them s)) -- ^ Receive and decode second messages
+           -> m (them s) -- ^ Receive and decode second messages
            -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
            -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
            -> (them s -> Maybe (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
@@ -481,7 +382,7 @@ generating
                         then do
                           encodeAndSend $ makeGen topic YourTurn
                           progress <- getProgress symbioteState
-                          (onProgress topic progress)
+                          onProgress topic progress
                           operating
                             encodeAndSend receiveAndDecode
                             makeGen makeOp
@@ -502,11 +403,11 @@ generating
       hasReceivedFinished <- liftIO $ readTVarIO hasReceivedFinishedVar
       case hasReceivedFinished of
         HasReceivedFinished -> do
-          (onSuccess topic)
+          onSuccess topic
           onFinished -- stop cycling - last generation in sequence is from second
         HasntReceivedFinished -> do
           progress <- getProgress symbioteState
-          (onProgress topic progress)
+          onProgress topic progress
           operating
             encodeAndSend receiveAndDecode
             makeGen makeOp
@@ -521,7 +422,7 @@ generating
 operating :: MonadIO m
           => Show s
           => (me s -> m ()) -- ^ Encode and send first messages
-          -> (m (them s)) -- ^ Receive and decode second messages
+          -> m (them s) -- ^ Receive and decode second messages
           -> (Topic -> Generating s -> me s) -- ^ Build a generating datum, whether first or second
           -> (Topic -> Operating s -> me s) -- ^ Build a generating datum, whether first or second
           -> (them s -> Maybe (Topic, Generating s)) -- ^ Deconstruct an operating datum, whether first or second
@@ -556,7 +457,7 @@ operating
             generatingTryFinished
           YourTurn -> do
             progress <- getProgress symbioteState
-            (onProgress topic progress)
+            onProgress topic progress
             generating
               encodeAndSend receiveAndDecode
               makeGen makeOp
@@ -599,11 +500,11 @@ operating
       hasSentFinished <- liftIO $ readTVarIO hasSentFinishedVar
       case hasSentFinished of
         HasSentFinished -> do
-          (onSuccess topic)
+          onSuccess topic
           onFinished -- stop cycling - last operation in sequence is from first
         HasntSentFinished -> do
           progress <- getProgress symbioteState
-          (onProgress topic progress)
+          onProgress topic progress
           generating
             encodeAndSend receiveAndDecode
             makeGen makeOp
