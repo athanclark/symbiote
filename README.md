@@ -11,6 +11,8 @@ It's a pretty simple idea:
 
 ![](https://github.com/athanclark/symbiote/raw/master/images/drawing-rendered.png)
 
+### Setting
+
 Basically, the test suite envolves two peers - we'll call them Peer A and Peer B, and they're connected
 by some network. Likewise, they are both using (possibly different) systems, which we've denoted as Lang A
 (like Haskell) and Lang B (like PureScript / JavaScript).
@@ -23,6 +25,8 @@ In the diagram above, each system has some idea of what "Type T" looks and feels
 different implementations on each system. Again, though, we care about their _outcome_ being identical; so we
 disambiguate the idea from the data.
 
+### Protocol
+
 The first step in the protocol is for the generating party (Peer A) to generate an instance of Type T, and an operation
 on that type - this operation, too, needs a serialization implementation (but for most intents and purposes,
 the implementation will be only for the scope of use with this test suite).
@@ -32,8 +36,12 @@ it "performs" the operation on that instance to get an _expected result_. Basica
 remote procedure call for that operation, and verifying that the result obtained remotely is identical to the
 result obtained locally.
 
+### Remote Procedure Call
+
 As just stated, Peer A then sends the serialized instance and operation to Peer B over that network, where Peer B
 decodes the data, and performs the operation. Peer B then encodes the result, and sends it back to Peer A.
+
+### Verification
 
 Peer A now receives the performed data from Peer B, and can now decode it, and test to see if it is equal to the
 expected result. If it is, it will tell Peer B that it's "their turn" to generate data.
