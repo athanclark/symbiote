@@ -13,23 +13,67 @@
 
 {-|
 
-The project operates as follows:
+Module: Test.Serialization.Symbiote
+Copyright: (c) 2019 Athan Clark
+License: BSD-3-Style
+Maintainer: athan.clark@gmail.com
+Portability: GHC
 
-Given two peers A and B and some communications transport T (utilizing a serialization format S),
-and a data type Q with some set of operations on that data type Op_Q,
-the following functions / procedures are assumed:
+As an example, say you have some data type @TypeA@, and some encoding / decoding instance with Aeson
+for that data type. Now, you've also got a few functions that work with that data type - @f :: TypeA -> TypeA@
+and @g :: TypeA -> TypeA -> TypeA@, and you've also taken the time to write a proper 'Arbitrary' instance for @TypeA@.
 
-tAB: the function communicates some data in S from peer A to peer B
-tBA: the function communicates some data in S from peer B to peer A
-encode :: Q -> S
-decode :: S -> Q -- disregarding error handling
+Your first order of business in making @TypeA@ a symbiote, is to first demonstrate what operations are supported by it:
 
-And the following property should exist, from peer A's perspective:
+> {-# LANGUAGE MultiparamTypeClasses, TypeFamilies #-}
+>
+> instance SymbioteOperation TypeA where
+>   data Operation TypeA
+>     = F
+>     | G TypeA
+>   perform op x = case op of
+>     F -> f x
+>     G y -> g y x
 
-forall f in Op_Q, q in Q.
-  f q == decode (tBA (f (tAB (encode q)))
+You're also going to need to make sure your new data-family has appropriate serialization instances, as well:
 
-where the left invocation of f occurs in peer A, and the right invocation occurs in peer B.
+> instance ToJSON (Operation TypeA) where
+>   toJSON op = case op of
+>     F -> toJSON "f"
+>     G x -> "g" .: x
+>
+> instance FromJSON (Operation TypeA) where
+>   parseJSON json = getF <|> getG
+>     where
+>       getF = do
+>         s <- parseJSON json
+>         if s == "f"
+>           then pure F
+>           else fail "Not F"
+>       getG = do
+>         x <- json .: "g"
+>         pure (G x)
+
+Next, let's make @TypeA@ an instance of 'Symbiote':
+
+> instance Symbiote TypeA Value where
+>   encode = Aeson.toJSON
+>   decode = Aeson.parseMaybe Aeson.parseJSON
+>   encodeOp = Aeson.toJSON
+>   decodeOp = Aeson.parseMaybe Aeson.parseJSON
+
+this instance above actually works for any type that implements @ToJSON@ and @FromJSON@ - there's an orphan
+definition in "Test.Serialization.Symbiote.Aeson".
+
+Next, you're going to need to actually use this, by registering the type in a test suite:
+
+> myFancyTestSuite :: SymbioteT Value IO ()
+> myFancyTestSuite = register "TypeA" 100 (Proxy :: Proxy TypeA)
+
+Lastly, you're going to need to actually run the test suite by attaching it to a network. The best way to
+do that, is decide whether this peer will be the first or second peer to start the protocol, then use the
+respective 'firstPeer' and 'secondPeer' functions - they take as arguments functions that define "how to send"
+and "how to receive" messages, and likewise how to report status.
 
 -}
 
