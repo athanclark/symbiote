@@ -1,14 +1,15 @@
 {-# LANGUAGE
-    MultiParamTypeClasses
+    RankNTypes
   , TypeFamilies
-  , ExistentialQuantification
-  , RankNTypes
-  , ScopedTypeVariables
+  , DeriveGeneric
   , NamedFieldPuns
   , FlexibleContexts
-  , StandaloneDeriving
-  , UndecidableInstances
   , FlexibleInstances
+  , StandaloneDeriving
+  , ScopedTypeVariables
+  , UndecidableInstances
+  , MultiParamTypeClasses
+  , ExistentialQuantification
   #-}
 
 {-|
@@ -78,13 +79,13 @@ and "how to receive" messages, and likewise how to report status.
 -}
 
 module Test.Serialization.Symbiote
-  ( SymbioteOperation (..), Symbiote (..), EitherOp (..), Topic, SymbioteT, register
+  ( SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, SymbioteT, register
   , firstPeer, secondPeer, First (..), Second (..), Generating (..), Operating (..), Failure (..)
   , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest
   ) where
 
 import Test.Serialization.Symbiote.Core
-  ( Topic (..), newGeneration, SymbioteState (..), SymbioteT, runSymbioteT
+  ( Topic (..), newGeneration, SymbioteState (..), ExistsSymbiote (..), SymbioteT, runSymbioteT
   , GenerateSymbiote (..), generateSymbiote, getProgress, Symbiote (..), SymbioteOperation (..))
 
 import Data.Map (Map)
@@ -102,49 +103,59 @@ import Control.Monad.State (modify')
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 import Test.QuickCheck.Gen (Gen)
+import GHC.Generics (Generic)
 
 
--- | The most trivial serialization medium for any @a@.
-newtype EitherOp a = EitherOp (Either a (Operation a))
-deriving instance (Eq a, Eq (Operation a)) => Eq (EitherOp a)
-deriving instance (Show a, Show (Operation a)) => Show (EitherOp a)
+-- | The most trivial serialization medium for any @a@ and @o@.
+data SimpleSerialization a o
+  = SimpleValue a
+  | SimpleOutput o
+  | SimpleOperation (Operation a)
+  deriving (Generic)
+deriving instance (Show a, Show o, Show (Operation a)) => Show (SimpleSerialization a o)
+deriving instance (Eq a, Eq o, Eq (Operation a)) => Eq (SimpleSerialization a o)
 
-instance SymbioteOperation a => Symbiote a (EitherOp a) where
-  encode = EitherOp . Left
-  decode (EitherOp (Left x)) = Just x
-  decode (EitherOp (Right _)) = Nothing
-  encodeOp = EitherOp . Right
-  decodeOp (EitherOp (Left _)) = Nothing
-  decodeOp (EitherOp (Right x)) = Just x
+instance SymbioteOperation a o => Symbiote a o (SimpleSerialization a o) where
+  encode = SimpleValue
+  decode (SimpleValue x) = Just x
+  decode _ = Nothing
+  encodeOut _ = SimpleOutput
+  decodeOut _ (SimpleOutput x) = Just x
+  decodeOut _ _ = Nothing
+  encodeOp = SimpleOperation
+  decodeOp (SimpleOperation x) = Just x
+  decodeOp _ = Nothing
 
 
 -- | Register a topic in the test suite
-register :: forall a s m
+register :: forall a o s m
           . Arbitrary a
          => Arbitrary (Operation a)
-         => Symbiote a s
-         => Eq a
+         => Symbiote a o s
+         => Eq o
          => MonadIO m
          => Topic
          -> Int -- ^ Max size
-         -> Proxy a
+         -> Proxy a -- ^ Reference to datatype
          -> SymbioteT s m ()
 register t maxSize Proxy = do
   generation <- liftIO (newTVarIO newGeneration)
-  let newState :: SymbioteState s
+  let newState :: SymbioteState a o s
       newState = SymbioteState
         { generate = arbitrary :: Gen a
         , generateOp = arbitrary :: Gen (Operation a)
-        , equal = (==) :: a -> a -> Bool
+        , equal = (==) :: o -> o -> Bool
         , maxSize
         , generation
-        , encode' = encode
-        , encodeOp' = encodeOp
-        , decode' = decode
-        , decodeOp' = decodeOp
-        , perform' = perform
+        , encode'    = encode
+        , encodeOut' = encodeOut (Proxy :: Proxy a)
+        , encodeOp'  = encodeOp
+        , decode'    = decode
+        , decodeOut' = decodeOut (Proxy :: Proxy a)
+        , decodeOp'  = decodeOp
+        , perform'   = perform
         }
-  modify' (Map.insert t newState)
+  modify' (Map.insert t (ExistsSymbiote newState))
 
 -- | Messages sent by a peer during their generating phase
 data Generating s
@@ -272,7 +283,10 @@ firstPeer :: forall m s
           -> m ()
 firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
   state <- runSymbioteT x True
-  let topics = maxSize <$> state
+  let topics = go <$> state
+        where
+          go s = case s of
+            ExistsSymbiote s' -> maxSize s'
   encodeAndSend (AvailableTopics topics)
   shouldBeStart <- receiveAndDecode
   case shouldBeStart of
@@ -320,7 +334,10 @@ secondPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
   shouldBeAvailableTopics <- receiveAndDecode
   case shouldBeAvailableTopics of
     AvailableTopics topics -> do
-      let myTopics = maxSize <$> state
+      let myTopics = go <$> state
+            where
+              go s = case s of
+                ExistsSymbiote s' -> maxSize s'
       if myTopics /= topics
         then do
           encodeAndSend (BadTopics myTopics)
@@ -362,7 +379,8 @@ data HasReceivedFinished
   | HasntReceivedFinished
 
 
-generating :: MonadIO m
+generating :: forall s m them me
+            . MonadIO m
            => Show s
            => (me s -> m ()) -- ^ Encode and send first messages
            -> m (them s) -- ^ Receive and decode second messages
@@ -377,7 +395,7 @@ generating :: MonadIO m
            -> (Failure them s -> m ()) -- ^ report topic failure
            -> (Topic -> Float -> m ()) -- ^ report topic progress
            -> Topic
-           -> SymbioteState s
+           -> ExistsSymbiote s
            -> m ()
 generating
   encodeAndSend receiveAndDecode
@@ -388,8 +406,8 @@ generating
   onSuccess
   onFailure
   onProgress
-  topic symbioteState@SymbioteState{equal,encode'} = do
-  mGenerated <- generateSymbiote symbioteState
+  topic existsSymbiote = do -- symbioteState@SymbioteState{equal,encodeOut'} = do
+  mGenerated <- generateSymbiote existsSymbiote -- symbioteState
   case mGenerated of
     DoneGenerating -> do
       encodeAndSend $ makeGen topic ImFinished
@@ -411,38 +429,50 @@ generating
           | secondOperatingTopic /= topic ->
             onFailure $ WrongTopic topic secondOperatingTopic
           | otherwise -> case shouldBeOperated of
-              Operated operatedValueEncoded -> case decode operatedValueEncoded of
-                Nothing -> do
-                  encodeAndSend $ makeGen topic $ GeneratingNoParseOperated operatedValueEncoded
-                  onFailure $ CantParseOperated topic operatedValueEncoded
-                Just operatedValue -> case decode generatedValueEncoded of
-                  Nothing -> onFailure $ CantParseLocalValue topic generatedValueEncoded
-                  Just generatedValue -> case decodeOp generatedOperationEncoded of
-                    Nothing -> onFailure $ CantParseLocalOperation topic generatedOperationEncoded
-                    Just generatedOperation -> do
-                      -- decoded operated value, generated value & operation
-                      let expected = perform generatedOperation generatedValue
-                      if equal expected operatedValue
-                        then do
-                          encodeAndSend $ makeGen topic YourTurn
-                          progress <- getProgress symbioteState
-                          onProgress topic progress
-                          operating
-                            encodeAndSend receiveAndDecode
-                            makeGen makeOp
-                            getGen getOp
-                            hasSentFinishedVar hasReceivedFinishedVar
-                            onFinished
-                            onSuccess
-                            onFailure
-                            onProgress
-                            topic symbioteState
-                        else do
-                          encodeAndSend $ makeGen topic $ BadResult operatedValueEncoded
-                          onFailure $ SafeFailure topic (encode' expected) operatedValueEncoded
+              Operated operatedValueEncoded -> case existsSymbiote of
+                ExistsSymbiote symbioteState ->
+                  let go :: forall a o
+                          . Arbitrary a
+                         => Arbitrary (Operation a)
+                         => Symbiote a o s
+                         => Eq o
+                         => SymbioteState a o s -> m ()
+                      go SymbioteState{decode',decodeOp',decodeOut',equal,encodeOut',perform'} = case decodeOut' operatedValueEncoded of
+                        Nothing -> do
+                          encodeAndSend $ makeGen topic $ GeneratingNoParseOperated operatedValueEncoded
+                          onFailure $ CantParseOperated topic operatedValueEncoded
+                        Just operatedValue -> case decode' generatedValueEncoded of
+                          Nothing -> onFailure $ CantParseLocalValue topic generatedValueEncoded
+                          Just generatedValue -> case decodeOp' generatedOperationEncoded of
+                            Nothing -> onFailure $ CantParseLocalOperation topic generatedOperationEncoded
+                            Just generatedOperation -> do
+                              -- decoded operated value, generated value & operation
+                              let expected :: o
+                                  expected = perform' generatedOperation generatedValue
+                              if  equal expected operatedValue
+                                then do
+                                  encodeAndSend $ makeGen topic YourTurn
+                                  progress <- getProgress existsSymbiote
+                                  onProgress topic progress
+                                  operating
+                                    encodeAndSend receiveAndDecode
+                                    makeGen makeOp
+                                    getGen getOp
+                                    hasSentFinishedVar hasReceivedFinishedVar
+                                    onFinished
+                                    onSuccess
+                                    onFailure
+                                    onProgress
+                                    topic existsSymbiote
+                                else do
+                                  encodeAndSend $ makeGen topic $ BadResult operatedValueEncoded
+                                  onFailure $ SafeFailure topic (encodeOut' expected) operatedValueEncoded
+                  in  go symbioteState
               _ -> onFailure $ BadOperating topic shouldBeOperated
         _ -> onFailure $ BadThem topic shouldBeOperating
   where
+
+    operatingTryFinished :: m ()
     operatingTryFinished = do
       hasReceivedFinished <- liftIO $ readTVarIO hasReceivedFinishedVar
       case hasReceivedFinished of
@@ -450,7 +480,7 @@ generating
           onSuccess topic
           onFinished -- stop cycling - last generation in sequence is from second
         HasntReceivedFinished -> do
-          progress <- getProgress symbioteState
+          progress <- getProgress existsSymbiote
           onProgress topic progress
           operating
             encodeAndSend receiveAndDecode
@@ -461,9 +491,10 @@ generating
             onSuccess
             onFailure
             onProgress
-            topic symbioteState
+            topic existsSymbiote
 
-operating :: MonadIO m
+operating :: forall s m them me
+           . MonadIO m
           => Show s
           => (me s -> m ()) -- ^ Encode and send first messages
           -> m (them s) -- ^ Receive and decode second messages
@@ -478,7 +509,7 @@ operating :: MonadIO m
           -> (Failure them s -> m ()) -- ^ report topic failure
           -> (Topic -> Float -> m ()) -- ^ report topic progress
           -> Topic
-          -> SymbioteState s
+          -> ExistsSymbiote s
           -> m ()
 operating
   encodeAndSend receiveAndDecode
@@ -489,21 +520,56 @@ operating
   onSuccess
   onFailure
   onProgress
-  topic symbioteState@SymbioteState{decode',decodeOp',perform',encode'} = do
+  topic existsSymbiote = do -- symbioteState@SymbioteState{decode',decodeOp',perform',encode'} = do
   shouldBeGenerating <- receiveAndDecode
   case getGen shouldBeGenerating of
     Just (secondGeneratingTopic,shouldBeGenerated)
       | secondGeneratingTopic /= topic ->
         onFailure $ WrongTopic topic secondGeneratingTopic
-      | otherwise -> case shouldBeGenerated of
-          ImFinished -> do
-            liftIO $ atomically $ writeTVar hasReceivedFinishedVar HasReceivedFinished
-            generatingTryFinished
-          YourTurn -> do
-            progress <- getProgress symbioteState
-            onProgress topic progress
-            generating
-              encodeAndSend receiveAndDecode
+      | otherwise -> case existsSymbiote of
+          ExistsSymbiote symbioteState -> go symbioteState shouldBeGenerated -- case shouldBeGenerated of
+    _ -> onFailure $ BadThem topic shouldBeGenerating
+  where
+    go :: forall a o
+        . Arbitrary a
+       => Arbitrary (Operation a)
+       => Symbiote a o s
+       => Eq o
+       => SymbioteState a o s -> Generating s -> m ()
+    go SymbioteState{decode',decodeOp',perform',encodeOut'} shouldBeGenerated = case shouldBeGenerated of
+      ImFinished -> do
+        liftIO $ atomically $ writeTVar hasReceivedFinishedVar HasReceivedFinished
+        generatingTryFinished
+      YourTurn -> do
+        progress <- getProgress existsSymbiote
+        onProgress topic progress
+        generating
+          encodeAndSend receiveAndDecode
+          makeGen makeOp
+          getGen getOp
+          hasSentFinishedVar hasReceivedFinishedVar
+          onFinished
+          onSuccess
+          onFailure
+          onProgress
+          topic existsSymbiote
+      Generated
+        { genValue = generatedValueEncoded
+        , genOperation = generatedOperationEncoded
+        } -> case decode' generatedValueEncoded of
+        Nothing -> do
+          encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedValueEncoded
+          onFailure $ CantParseGeneratedValue topic generatedValueEncoded
+        Just generatedValue -> case decodeOp' generatedOperationEncoded of
+          Nothing -> do
+            encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedOperationEncoded
+            onFailure $ CantParseGeneratedOperation topic generatedOperationEncoded
+          Just generatedOperation -> do
+            encodeAndSend $ makeOp topic $ Operated $ encodeOut' $ perform' generatedOperation generatedValue
+            -- wait for response
+            operating
+              encodeAndSend
+              receiveAndDecode
               makeGen makeOp
               getGen getOp
               hasSentFinishedVar hasReceivedFinishedVar
@@ -511,35 +577,10 @@ operating
               onSuccess
               onFailure
               onProgress
-              topic symbioteState
-          Generated
-            { genValue = generatedValueEncoded
-            , genOperation = generatedOperationEncoded
-            } -> case decode' generatedValueEncoded of
-            Nothing -> do
-              encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedValueEncoded
-              onFailure $ CantParseGeneratedValue topic generatedValueEncoded
-            Just generatedValue -> case decodeOp' generatedOperationEncoded of
-              Nothing -> do
-                encodeAndSend $ makeOp topic $ OperatingNoParseValue generatedOperationEncoded
-                onFailure $ CantParseGeneratedOperation topic generatedOperationEncoded
-              Just generatedOperation -> do
-                encodeAndSend $ makeOp topic $ Operated $ encode' $ perform' generatedOperation generatedValue
-                -- wait for response
-                operating
-                  encodeAndSend
-                  receiveAndDecode
-                  makeGen makeOp
-                  getGen getOp
-                  hasSentFinishedVar hasReceivedFinishedVar
-                  onFinished
-                  onSuccess
-                  onFailure
-                  onProgress
-                  topic symbioteState
-          _ -> onFailure $ BadGenerating topic shouldBeGenerated
-    _ -> onFailure $ BadThem topic shouldBeGenerating
-  where
+              topic existsSymbiote
+      _ -> onFailure $ BadGenerating topic shouldBeGenerated
+
+    generatingTryFinished :: m ()
     generatingTryFinished = do
       hasSentFinished <- liftIO $ readTVarIO hasSentFinishedVar
       case hasSentFinished of
@@ -547,7 +588,7 @@ operating
           onSuccess topic
           onFinished -- stop cycling - last operation in sequence is from first
         HasntSentFinished -> do
-          progress <- getProgress symbioteState
+          progress <- getProgress existsSymbiote
           onProgress topic progress
           generating
             encodeAndSend receiveAndDecode
@@ -558,7 +599,7 @@ operating
             onSuccess
             onFailure
             onProgress
-            topic symbioteState
+            topic existsSymbiote
 
 
 -- | Prints to stdout and uses a local channel for a sanity-check - doesn't serialize.

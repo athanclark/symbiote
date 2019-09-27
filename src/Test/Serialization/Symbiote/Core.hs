@@ -1,11 +1,12 @@
 {-# LANGUAGE
-    ExistentialQuantification
-  , NamedFieldPuns
-  , RankNTypes
-  , ScopedTypeVariables
+    RankNTypes
   , TypeFamilies
-  , MultiParamTypeClasses
+  , NamedFieldPuns
   , FlexibleContexts
+  , ScopedTypeVariables
+  , MultiParamTypeClasses
+  , FunctionalDependencies
+  , ExistentialQuantification
   , GeneralizedNewtypeDeriving
   #-}
 
@@ -15,6 +16,7 @@ import Data.Text (Text)
 import Data.String (IsString)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Proxy (Proxy (..))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Concurrent.STM
   (TVar, readTVar, readTVarIO, modifyTVar', atomically)
@@ -26,16 +28,18 @@ import qualified Test.QuickCheck.Gen as QC
 
 
 -- | A type-level relation between a type and appropriate, testable operations on that type.
-class SymbioteOperation a where
+class SymbioteOperation a o | a -> o where
   data Operation a :: *
-  perform :: Operation a -> a -> a
+  perform :: Operation a -> a -> o
 
 -- | A serialization format for a particular type, and serialized data type.
-class SymbioteOperation a => Symbiote a s where
-  encode   :: a -> s
-  decode   :: s -> Maybe a
-  encodeOp :: Operation a -> s
-  decodeOp :: s -> Maybe (Operation a)
+class SymbioteOperation a o => Symbiote a o s | a -> o where
+  encode    :: a -> s
+  decode    :: s -> Maybe a
+  encodeOut :: Proxy a -> o -> s
+  decodeOut :: Proxy a -> s -> Maybe o
+  encodeOp  :: Operation a -> s
+  decodeOp  :: s -> Maybe (Operation a)
 
 
 -- | Unique name of a type, for a suite of tests
@@ -45,12 +49,12 @@ newtype Topic = Topic Text
 -- | Protocol state for a particular topic
 data SymbioteProtocol a s
   = MeGenerated
-    { meGenValue :: a
+    { meGenValue     :: a
     , meGenOperation :: Operation a
-    , meGenReceived :: Maybe s
+    , meGenReceived  :: Maybe s -- ^ Remotely operated value
     }
   | ThemGenerating
-    { themGen :: Maybe (s, s)
+    { themGen :: Maybe (s, s) -- ^ Remotely generated value and operation
     }
   | NotStarted
   | Finished
@@ -69,33 +73,39 @@ newGeneration = SymbioteGeneration
 
 
 -- | Internal existential state of a registered topic with type's facilities
-data SymbioteState s =
-  forall a
-  . ( Arbitrary a
-    , Arbitrary (Operation a)
-    , Symbiote a s
-    , Eq a
-    ) =>
+data SymbioteState a o s =
   SymbioteState
   { generate   :: Gen a
   , generateOp :: Gen (Operation a)
-  , equal      :: a -> a -> Bool
+  , equal      :: o -> o -> Bool
   , maxSize    :: Int
   , generation :: TVar (SymbioteGeneration a s)
   , encode'    :: a -> s
+  , encodeOut' :: o -> s
   , encodeOp'  :: Operation a -> s
   , decode'    :: s -> Maybe a
+  , decodeOut' :: s -> Maybe o
   , decodeOp'  :: s -> Maybe (Operation a)
-  , perform'   :: Operation a -> a -> a
+  , perform'   :: Operation a -> a -> o
   }
 
 
-type SymbioteT s m = ReaderT Bool (StateT (Map Topic (SymbioteState s)) m)
+data ExistsSymbiote s =
+  forall a o
+  . ( Arbitrary a
+    , Arbitrary (Operation a)
+    , Symbiote a o s
+    , Eq o
+    ) =>
+  ExistsSymbiote (SymbioteState a o s)
+
+
+type SymbioteT s m = ReaderT Bool (StateT (Map Topic (ExistsSymbiote s)) m)
 
 runSymbioteT :: Monad m
              => SymbioteT s m ()
              -> Bool -- ^ Is this the first peer to initiate the protocol?
-             -> m (Map Topic (SymbioteState s))
+             -> m (Map Topic (ExistsSymbiote s))
 runSymbioteT x isFirst = execStateT (runReaderT x isFirst) Map.empty
 
 
@@ -107,8 +117,8 @@ data GenerateSymbiote s
     }
 
 
-generateSymbiote :: forall s m. MonadIO m => SymbioteState s -> m (GenerateSymbiote s)
-generateSymbiote SymbioteState{generate,generateOp,maxSize,generation} = do
+generateSymbiote :: forall s m. MonadIO m => ExistsSymbiote s -> m (GenerateSymbiote s)
+generateSymbiote (ExistsSymbiote SymbioteState{generate,generateOp,maxSize,generation}) = do
   let go g@SymbioteGeneration{size} = g {size = size + 1}
   SymbioteGeneration{size} <- liftIO $ atomically $ modifyTVar' generation go *> readTVar generation
   if size >= maxSize
@@ -121,7 +131,7 @@ generateSymbiote SymbioteState{generate,generateOp,maxSize,generation} = do
       pure GeneratedSymbiote{generatedValue,generatedOperation}
 
 
-getProgress :: MonadIO m => SymbioteState s -> m Float
-getProgress SymbioteState{maxSize,generation} = do
+getProgress :: MonadIO m => ExistsSymbiote s -> m Float
+getProgress (ExistsSymbiote SymbioteState{maxSize,generation}) = do
   SymbioteGeneration{size} <- liftIO $ readTVarIO generation
   pure $ fromIntegral size / fromIntegral maxSize

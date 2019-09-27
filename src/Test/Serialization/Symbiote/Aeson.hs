@@ -14,11 +14,15 @@ import qualified Data.Aeson.Types as Json
 instance
   ( Json.ToJSON a
   , Json.FromJSON a
+  , Json.ToJSON o
+  , Json.FromJSON o
   , Json.ToJSON (Operation a)
   , Json.FromJSON (Operation a)
-  , SymbioteOperation a
-  ) => Symbiote a Json.Value where
+  , SymbioteOperation a o
+  ) => Symbiote a o Json.Value where
   encode = Json.toJSON
   decode = Json.parseMaybe Json.parseJSON
   encodeOp = Json.toJSON
   decodeOp = Json.parseMaybe Json.parseJSON
+  encodeOut _ = Json.toJSON
+  decodeOut _ = Json.parseMaybe Json.parseJSON
