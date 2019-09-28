@@ -16,6 +16,10 @@ import qualified Test.Abides.Data.Ord as Ord
 import qualified Test.Abides.Data.Enum as Enum
 import qualified Test.Abides.Control.Category as Category
 import qualified Test.Abides.Data.Semiring as Semiring
+import qualified Test.Abides.Data.Ring as Ring
+import qualified Test.Abides.Data.CommutativeRing as CommutativeRing
+import qualified Test.Abides.Data.DivisionRing as DivisionRing
+import qualified Test.Abides.Data.EuclideanRing as EuclideanRing
 import Test.Serialization.Symbiote.Core (SymbioteOperation (Operation, perform))
 import GHC.Generics (Generic)
 
@@ -40,6 +44,21 @@ newtype AbidesCategory c a b = AbidesCategory {getAbidesCategory :: c a b}
 
 newtype AbidesSemiring a = AbidesSemiring {getAbidesSemiring :: a}
   deriving (Generic, Eq, Show, Num)
+
+newtype AbidesRing a = AbidesRing {getAbidesRing :: a}
+  deriving (Generic, Eq, Show, Num)
+
+newtype AbidesCommutativeRing a = AbidesCommutativeRing {getAbidesCommutativeRing :: a}
+  deriving (Generic, Eq, Show, Num)
+
+newtype AbidesDivisionRing a = AbidesDivisionRing {getAbidesDivisionRing :: a}
+  deriving (Generic, Eq, Show, Num, Fractional)
+
+newtype AbidesEuclideanRing a = AbidesEuclideanRing {getAbidesEuclideanRing :: a}
+  deriving (Generic, Eq, Show, Num)
+
+newtype AbidesField a = AbidesField {getAbidesField :: a}
+  deriving (Generic, Eq, Show, Num, Fractional)
 
 
 
@@ -113,3 +132,43 @@ instance (Num a, Eq a) => SymbioteOperation (AbidesSemiring a) Bool where
     SemiringLeftDistributive y z -> Semiring.leftDistributive x y z
     SemiringRightDistributive y z -> Semiring.rightDistributive x y z
     SemiringAnnihilation -> Semiring.annihilation x
+
+instance (Num a, Eq a) => SymbioteOperation (AbidesRing a) Bool where
+  data Operation (AbidesRing a)
+    = RingSemiring (Operation (AbidesSemiring a))
+    | RingAdditiveInverse
+  perform op x@(AbidesRing x') = case op of
+    RingSemiring op' -> perform op' (AbidesSemiring x')
+    RingAdditiveInverse -> Ring.additiveInverse x
+
+instance (Num a, Eq a) => SymbioteOperation (AbidesCommutativeRing a) Bool where
+  data Operation (AbidesCommutativeRing a)
+    = CommutativeRingRing (Operation (AbidesRing a))
+    | CommutativeRingCommutative (AbidesCommutativeRing a)
+  perform op x@(AbidesCommutativeRing x') = case op of
+    CommutativeRingRing op' -> perform op' (AbidesRing x')
+    CommutativeRingCommutative y -> CommutativeRing.commutative x y
+
+instance (Fractional a, Eq a) => SymbioteOperation (AbidesDivisionRing a) Bool where
+  data Operation (AbidesDivisionRing a)
+    = DivisionRingRing (Operation (AbidesRing a))
+    | DivisionRingInverse
+  perform op x@(AbidesDivisionRing x') = case op of
+    DivisionRingRing op' -> perform op' (AbidesRing x')
+    DivisionRingInverse -> DivisionRing.inverse x
+
+instance (Num a, Eq a) => SymbioteOperation (AbidesEuclideanRing a) Bool where
+  data Operation (AbidesEuclideanRing a)
+    = EuclideanRingRing (Operation (AbidesRing a))
+    | EuclideanRingIntegralDomain (AbidesEuclideanRing a)
+  perform op x@(AbidesEuclideanRing x') = case op of
+    EuclideanRingRing op' -> perform op' (AbidesRing x')
+    EuclideanRingIntegralDomain y -> EuclideanRing.integralDomain x y
+
+instance (Fractional a, Eq a) => SymbioteOperation (AbidesField a) Bool where
+  data Operation (AbidesField a)
+    = FieldDivisionRing (Operation (AbidesDivisionRing a))
+    | FieldEuclideanRing (Operation (AbidesEuclideanRing a))
+  perform op (AbidesField x') = case op of
+    FieldDivisionRing op' -> perform op' (AbidesDivisionRing x')
+    FieldEuclideanRing op' -> perform op' (AbidesEuclideanRing x')
