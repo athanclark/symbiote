@@ -49,13 +49,13 @@ tests = testGroup "All Tests"
       , testCase "List over various" (simpleTest listSuite)
       ]
       where
-        unitSuite :: SymbioteT (SimpleSerialization ()) IO ()
+        unitSuite :: SymbioteT (SimpleSerialization () ()) IO ()
         unitSuite = register "Unit" 100 (Proxy :: Proxy ())
-        intSuite :: SymbioteT (SimpleSerialization Int) IO ()
+        intSuite :: SymbioteT (SimpleSerialization Int Bool) IO ()
         intSuite = register "Int" 100 (Proxy :: Proxy Int)
-        doubleSuite :: SymbioteT (SimpleSerialization Double) IO ()
+        doubleSuite :: SymbioteT (SimpleSerialization Double Bool) IO ()
         doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
-        listSuite :: SymbioteT (SimpleSerialization [Int]) IO ()
+        listSuite :: SymbioteT (SimpleSerialization [Int] (Either Bool [Int])) IO ()
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
     bytestringTests :: TestTree
     bytestringTests = testGroup "ByteString Tests"
