@@ -15,6 +15,7 @@ import qualified Test.Abides.Data.Eq as Eq
 import qualified Test.Abides.Data.Ord as Ord
 import qualified Test.Abides.Data.Enum as Enum
 import qualified Test.Abides.Control.Category as Category
+import qualified Test.Abides.Data.Semiring as Semiring
 import Test.Serialization.Symbiote.Core (SymbioteOperation (Operation, perform))
 import GHC.Generics (Generic)
 
@@ -37,6 +38,9 @@ newtype AbidesEnum a = AbidesEnum {getAbidesEnum :: a}
 newtype AbidesCategory c a b = AbidesCategory {getAbidesCategory :: c a b}
   deriving (Generic, Eq, Show, Category)
 
+newtype AbidesSemiring a = AbidesSemiring {getAbidesSemiring :: a}
+  deriving (Generic, Eq, Show, Num)
+
 
 
 
@@ -48,11 +52,11 @@ instance (Semigroup a, Eq a) => SymbioteOperation (AbidesSemigroup a) Bool where
 
 instance (Monoid a, Eq a) => SymbioteOperation (AbidesMonoid a) Bool where
   data Operation (AbidesMonoid a)
-    = MonoidAssociative (AbidesMonoid a) (AbidesMonoid a)
+    = MonoidSemigroup (Operation (AbidesSemigroup a))
     | MonoidLeftIdentity
     | MonoidRightIdentity
-  perform op x = case op of
-    MonoidAssociative y z -> Semigroup.associative x y z
+  perform op x@(AbidesMonoid x') = case op of
+    MonoidSemigroup op' -> perform op' (AbidesSemigroup x')
     MonoidLeftIdentity -> Monoid.leftIdentity x
     MonoidRightIdentity -> Monoid.rightIdentity x
 
@@ -95,3 +99,17 @@ instance (Category c, Eq (c a a)) => SymbioteOperation (AbidesCategory c a a) Bo
   perform op x = case op of
     CategoryIdentity -> Category.identity x
     CategoryAssociative y z -> Category.associative x y z
+
+instance (Num a, Eq a) => SymbioteOperation (AbidesSemiring a) Bool where
+  data Operation (AbidesSemiring a)
+    = SemiringCommutativeMonoid (AbidesSemiring a) (AbidesSemiring a)
+    | SemiringMonoid (AbidesSemiring a) (AbidesSemiring a)
+    | SemiringLeftDistributive (AbidesSemiring a) (AbidesSemiring a)
+    | SemiringRightDistributive (AbidesSemiring a) (AbidesSemiring a)
+    | SemiringAnnihilation
+  perform op x = case op of
+    SemiringCommutativeMonoid y z -> Semiring.commutativeMonoid x y z
+    SemiringMonoid y z -> Semiring.monoid x y z
+    SemiringLeftDistributive y z -> Semiring.leftDistributive x y z
+    SemiringRightDistributive y z -> Semiring.rightDistributive x y z
+    SemiringAnnihilation -> Semiring.annihilation x
