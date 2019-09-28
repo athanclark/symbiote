@@ -8,17 +8,27 @@
   , GeneralizedNewtypeDeriving
   #-}
 
+{-|
+
+This module provides newtypes for ensuring consistent functionality with respect to various class laws:
+Monoids, SemiRing, etc are all included via the abides library. Note: This only verifies the /consistency/
+of behavior between platforms - if both platforms are broken (return @False@) /consistently/, the tests
+will pass. Prevent this by implementing a local test suite with QuickCheck, and use the abides properties
+directly.
+
+-}
+
 module Test.Serialization.Symbiote.Abides where
 
 import Data.Aeson (ToJSON (..), FromJSON (..), object, (.=), (.:), Value (Object, String))
 import Data.Aeson.Types (typeMismatch)
+import Control.Applicative ((<|>))
 import Control.Category (Category)
 import qualified Test.Abides.Data.Semigroup as Semigroup
 import qualified Test.Abides.Data.Monoid as Monoid
 import qualified Test.Abides.Data.Eq as Eq
 import qualified Test.Abides.Data.Ord as Ord
 import qualified Test.Abides.Data.Enum as Enum
-import qualified Test.Abides.Control.Category as Category
 import qualified Test.Abides.Data.Semiring as Semiring
 import qualified Test.Abides.Data.Ring as Ring
 import qualified Test.Abides.Data.CommutativeRing as CommutativeRing
@@ -44,9 +54,6 @@ newtype AbidesOrd a = AbidesOrd {getAbidesOrd :: a}
 
 newtype AbidesEnum a = AbidesEnum {getAbidesEnum :: a}
   deriving (Generic, Eq, Ord, Show, Enum, Arbitrary, ToJSON, FromJSON)
-
-newtype AbidesCategory c a b = AbidesCategory {getAbidesCategory :: c a b}
-  deriving (Generic, Eq, Show, Category, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesSemiring a = AbidesSemiring {getAbidesSemiring :: a}
   deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
@@ -80,9 +87,11 @@ instance Arbitrary a => Arbitrary (Operation (AbidesSemigroup a)) where
   arbitrary = SemigroupAssociative <$> arbitrary <*> arbitrary
 instance ToJSON a => ToJSON (Operation (AbidesSemigroup a)) where
   toJSON op = case op of
-    SemigroupAssociative y z -> object ["y" .= y, "z" .= z]
+    SemigroupAssociative y z -> object ["associative" .= object ["y" .= y, "z" .= z]]
 instance FromJSON a => FromJSON (Operation (AbidesSemigroup a)) where
-  parseJSON (Object o) = SemigroupAssociative <$> o .: "y" <*> o .: "z"
+  parseJSON (Object o) = do
+    o' <- o .: "associative"
+    SemigroupAssociative <$> o' .: "y" <*> o' .: "z"
   parseJSON x = typeMismatch "Operation (AbidesSemigroup a)" x
 
 instance (Monoid a, Eq a) => SymbioteOperation (AbidesMonoid a) Bool where
@@ -135,6 +144,24 @@ instance Arbitrary a => Arbitrary (Operation (AbidesEq a)) where
     , EqTransitive <$> arbitrary <*> arbitrary
     , EqNegation <$> arbitrary
     ]
+instance ToJSON a => ToJSON (Operation (AbidesEq a)) where
+  toJSON op = case op of
+    EqSymmetry y -> object ["symmetry" .= y]
+    EqReflexive -> String "reflexive"
+    EqTransitive y z -> object ["transitive" .= object ["y" .= y, "z" .= z]]
+    EqNegation y -> object ["negation" .= y]
+instance FromJSON a => FromJSON (Operation (AbidesEq a)) where
+  parseJSON (Object o) = transitive <|> symmetry <|> negation
+    where
+      transitive = do
+        o' <- o .: "transitive"
+        EqTransitive <$> o' .: "y" <*> o' .: "z"
+      symmetry = EqSymmetry <$> o .: "symmetry"
+      negation = EqNegation <$> o .: "negation"
+  parseJSON x@(String s)
+    | s == "reflexive" = pure EqReflexive
+    | otherwise = typeMismatch "Operation (AbidesEq a)" x
+  parseJSON x = typeMismatch "Operation (AbidesEq a)" x
 
 instance (Ord a) => SymbioteOperation (AbidesOrd a) Bool where
   data Operation (AbidesOrd a)
@@ -153,6 +180,22 @@ instance Arbitrary a => Arbitrary (Operation (AbidesOrd a)) where
     , pure OrdReflexive
     , OrdTransitive <$> arbitrary <*> arbitrary
     ]
+instance ToJSON a => ToJSON (Operation (AbidesOrd a)) where
+  toJSON op = case op of
+    OrdReflexive -> String "reflexive"
+    OrdAntiSymmetry y -> object ["antisymmetry" .= y]
+    OrdTransitive y z -> object ["transitive" .= object ["y" .= y, "z" .= z]]
+instance FromJSON a => FromJSON (Operation (AbidesOrd a)) where
+  parseJSON (Object o) = transitive <|> antisymmetry
+    where
+      transitive = do
+        o' <- o .: "transitive"
+        OrdTransitive <$> o' .: "y" <*> o' .: "z"
+      antisymmetry = OrdAntiSymmetry <$> o .: "antisymmetry"
+  parseJSON x@(String s)
+    | s == "reflexive" = pure OrdReflexive
+    | otherwise = typeMismatch "Operation (AbidesOrd a)" x
+  parseJSON x = typeMismatch "Operation (AbidesOrd a)" x
 
 instance (Enum a, Ord a) => SymbioteOperation (AbidesEnum a) Bool where
   data Operation (AbidesEnum a)
@@ -171,22 +214,18 @@ instance Arbitrary a => Arbitrary (Operation (AbidesEnum a)) where
     , pure EnumPredSucc
     , pure EnumSuccPred
     ]
-
--- | Instances are monomorphic @c a a@ due to infinite types.
-instance (Category c, Eq (c a a)) => SymbioteOperation (AbidesCategory c a a) Bool where
-  data Operation (AbidesCategory c a a)
-    = CategoryIdentity
-    | CategoryAssociative (AbidesCategory c a a) (AbidesCategory c a a)
-  perform op x = case op of
-    CategoryIdentity -> Category.identity x
-    CategoryAssociative y z -> Category.associative x y z
-deriving instance Generic (Operation (AbidesCategory c a a))
-deriving instance Show (c a a) => Show (Operation (AbidesCategory c a a))
-instance Arbitrary (c a a) => Arbitrary (Operation (AbidesCategory c a a)) where
-  arbitrary = oneof
-    [ CategoryAssociative <$> arbitrary <*> arbitrary
-    , pure CategoryIdentity
-    ]
+instance ToJSON a => ToJSON (Operation (AbidesEnum a)) where
+  toJSON op = case op of
+    EnumCompareHom y -> object ["compareHom" .= y]
+    EnumPredSucc -> String "predsucc"
+    EnumSuccPred -> String "succpred"
+instance FromJSON a => FromJSON (Operation (AbidesEnum a)) where
+  parseJSON (Object o) = EnumCompareHom <$> o .: "compareHom"
+  parseJSON x@(String s)
+    | s == "predsucc" = pure EnumPredSucc
+    | s == "succpred" = pure EnumSuccPred
+    | otherwise = typeMismatch "Operation (AbidesEnum a)" x
+  parseJSON x = typeMismatch "Operation (AbidesEnum a)" x
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesSemiring a) Bool where
   data Operation (AbidesSemiring a)
@@ -211,6 +250,32 @@ instance Arbitrary a => Arbitrary (Operation (AbidesSemiring a)) where
     , SemiringRightDistributive <$> arbitrary <*> arbitrary
     , pure SemiringAnnihilation
     ]
+instance ToJSON a => ToJSON (Operation (AbidesSemiring a)) where
+  toJSON op = case op of
+    SemiringCommutativeMonoid y z -> object ["commutativeMonoid" .= object ["y" .= y, "z" .= z]]
+    SemiringMonoid y z -> object ["monoid" .= object ["y" .= y, "z" .= z]]
+    SemiringLeftDistributive y z -> object ["leftDistributive" .= object ["y" .= y, "z" .= z]]
+    SemiringRightDistributive y z -> object ["rightDistributive" .= object ["y" .= y, "z" .= z]]
+    SemiringAnnihilation -> String "annihilation"
+instance FromJSON a => FromJSON (Operation (AbidesSemiring a)) where
+  parseJSON (Object o) = commutativeMonoid <|> monoid <|> leftDistributive <|> rightDistributive
+    where
+      commutativeMonoid = do
+        o' <- o .: "commutativeMonoid"
+        SemiringCommutativeMonoid <$> o' .: "y" <*> o' .: "z"
+      monoid = do
+        o' <- o .: "monoid"
+        SemiringMonoid <$> o' .: "y" <*> o' .: "z"
+      leftDistributive = do
+        o' <- o .: "leftDistributive"
+        SemiringLeftDistributive <$> o' .: "y" <*> o' .: "z"
+      rightDistributive = do
+        o' <- o .: "rightDistributive"
+        SemiringRightDistributive <$> o' .: "y" <*> o' .: "z"
+  parseJSON x@(String s)
+    | s == "annihilation" = pure SemiringAnnihilation
+    | otherwise = typeMismatch "Operation (AbidesSemiring a)" x
+  parseJSON x = typeMismatch "Operation (AbidesSemiring a)" x
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesRing a) Bool where
   data Operation (AbidesRing a)
@@ -226,6 +291,16 @@ instance Arbitrary a => Arbitrary (Operation (AbidesRing a)) where
     [ RingSemiring <$> arbitrary
     , pure RingAdditiveInverse
     ]
+instance ToJSON a => ToJSON (Operation (AbidesRing a)) where
+  toJSON op = case op of
+    RingSemiring op' -> object ["semiring" .= op']
+    RingAdditiveInverse -> String "additiveInverse"
+instance FromJSON a => FromJSON (Operation (AbidesRing a)) where
+  parseJSON (Object o) = RingSemiring <$> o .: "semiring"
+  parseJSON x@(String s)
+    | s == "additiveInverse" = pure RingAdditiveInverse
+    | otherwise = typeMismatch "Operation (AbidesRing a)" x
+  parseJSON x = typeMismatch "Operation (AbidesRing a)" x
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesCommutativeRing a) Bool where
   data Operation (AbidesCommutativeRing a)
@@ -241,6 +316,16 @@ instance Arbitrary a => Arbitrary (Operation (AbidesCommutativeRing a)) where
     [ CommutativeRingRing <$> arbitrary
     , CommutativeRingCommutative <$> arbitrary
     ]
+instance ToJSON a => ToJSON (Operation (AbidesCommutativeRing a)) where
+  toJSON op = case op of
+    CommutativeRingRing op' -> object ["ring" .= op']
+    CommutativeRingCommutative y -> object ["commutative" .= y]
+instance FromJSON a => FromJSON (Operation (AbidesCommutativeRing a)) where
+  parseJSON (Object o) = ring <|> commutative
+    where
+      ring = CommutativeRingRing <$> o .: "ring"
+      commutative = CommutativeRingCommutative <$> o .: "commutative"
+  parseJSON x = typeMismatch "Operation (AbidesCommutativeRing a)" x
 
 instance (Fractional a, Eq a) => SymbioteOperation (AbidesDivisionRing a) Bool where
   data Operation (AbidesDivisionRing a)
@@ -256,21 +341,41 @@ instance Arbitrary a => Arbitrary (Operation (AbidesDivisionRing a)) where
     [ DivisionRingRing <$> arbitrary
     , pure DivisionRingInverse
     ]
+instance ToJSON a => ToJSON (Operation (AbidesDivisionRing a)) where
+  toJSON op = case op of
+    DivisionRingRing op' -> object ["ring" .= op']
+    DivisionRingInverse -> String "inverse"
+instance FromJSON a => FromJSON (Operation (AbidesDivisionRing a)) where
+  parseJSON (Object o) = DivisionRingRing <$> o .: "ring"
+  parseJSON x@(String s)
+    | s == "inverse" = pure DivisionRingInverse
+    | otherwise = typeMismatch "Operation (AbidesDivisionRing a)" x
+  parseJSON x = typeMismatch "Operation (AbidesDivisionRing a)" x
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesEuclideanRing a) Bool where
   data Operation (AbidesEuclideanRing a)
-    = EuclideanRingRing (Operation (AbidesRing a))
+    = EuclideanRingCommutativeRing (Operation (AbidesCommutativeRing a))
     | EuclideanRingIntegralDomain (AbidesEuclideanRing a)
   perform op x@(AbidesEuclideanRing x') = case op of
-    EuclideanRingRing op' -> perform op' (AbidesRing x')
+    EuclideanRingCommutativeRing op' -> perform op' (AbidesCommutativeRing x')
     EuclideanRingIntegralDomain y -> EuclideanRing.integralDomain x y
 deriving instance Generic (Operation (AbidesEuclideanRing a))
 deriving instance Show a => Show (Operation (AbidesEuclideanRing a))
 instance Arbitrary a => Arbitrary (Operation (AbidesEuclideanRing a)) where
   arbitrary = oneof
-    [ EuclideanRingRing <$> arbitrary
+    [ EuclideanRingCommutativeRing <$> arbitrary
     , EuclideanRingIntegralDomain <$> arbitrary
     ]
+instance ToJSON a => ToJSON (Operation (AbidesEuclideanRing a)) where
+  toJSON op = case op of
+    EuclideanRingCommutativeRing op' -> object ["commutativeRing" .= op']
+    EuclideanRingIntegralDomain y -> object ["integralDomain" .= y]
+instance FromJSON a => FromJSON (Operation (AbidesEuclideanRing a)) where
+  parseJSON (Object o) = commutativeRing <|> integralDomain
+    where
+      commutativeRing = EuclideanRingCommutativeRing <$> o .: "commutativeRing"
+      integralDomain = EuclideanRingIntegralDomain <$> o .: "integralDomain"
+  parseJSON x = typeMismatch "Operation (AbidesEuclideanRing a)" x
 
 instance (Fractional a, Eq a) => SymbioteOperation (AbidesField a) Bool where
   data Operation (AbidesField a)
@@ -286,3 +391,13 @@ instance Arbitrary a => Arbitrary (Operation (AbidesField a)) where
     [ FieldDivisionRing <$> arbitrary
     , FieldEuclideanRing <$> arbitrary
     ]
+instance ToJSON a => ToJSON (Operation (AbidesField a)) where
+  toJSON op = case op of
+    FieldDivisionRing op' -> object ["divisionRing" .= op']
+    FieldEuclideanRing y -> object ["euclideanRing" .= y]
+instance FromJSON a => FromJSON (Operation (AbidesField a)) where
+  parseJSON (Object o) = divisionRing <|> euclideanRing
+    where
+      divisionRing = FieldDivisionRing <$> o .: "divisionRing"
+      euclideanRing = FieldEuclideanRing <$> o .: "euclideanRing"
+  parseJSON x = typeMismatch "Operation (AbidesField a)" x
