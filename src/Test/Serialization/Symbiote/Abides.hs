@@ -1,6 +1,7 @@
 {-# Language
     TypeFamilies
   , DeriveGeneric
+  , OverloadedStrings
   , FlexibleInstances
   , StandaloneDeriving
   , MultiParamTypeClasses
@@ -9,6 +10,8 @@
 
 module Test.Serialization.Symbiote.Abides where
 
+import Data.Aeson (ToJSON (..), FromJSON (..), object, (.=), (.:), Value (Object, String))
+import Data.Aeson.Types (typeMismatch)
 import Control.Category (Category)
 import qualified Test.Abides.Data.Semigroup as Semigroup
 import qualified Test.Abides.Data.Monoid as Monoid
@@ -28,40 +31,40 @@ import GHC.Generics (Generic)
 
 
 newtype AbidesSemigroup a = AbidesSemigroup {getAbidesSemigroup :: a}
-  deriving (Generic, Eq, Show, Semigroup, Arbitrary)
+  deriving (Generic, Eq, Show, Semigroup, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesMonoid a = AbidesMonoid {getAbidesMonoid :: a}
-  deriving (Generic, Eq, Show, Semigroup, Monoid, Arbitrary)
+  deriving (Generic, Eq, Show, Semigroup, Monoid, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesEq a = AbidesEq {getAbidesEq :: a}
-  deriving (Generic, Eq, Show, Arbitrary)
+  deriving (Generic, Eq, Show, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesOrd a = AbidesOrd {getAbidesOrd :: a}
-  deriving (Generic, Eq, Show, Ord, Arbitrary)
+  deriving (Generic, Eq, Show, Ord, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesEnum a = AbidesEnum {getAbidesEnum :: a}
-  deriving (Generic, Eq, Ord, Show, Enum, Arbitrary)
+  deriving (Generic, Eq, Ord, Show, Enum, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesCategory c a b = AbidesCategory {getAbidesCategory :: c a b}
-  deriving (Generic, Eq, Show, Category, Arbitrary)
+  deriving (Generic, Eq, Show, Category, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesSemiring a = AbidesSemiring {getAbidesSemiring :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesRing a = AbidesRing {getAbidesRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesCommutativeRing a = AbidesCommutativeRing {getAbidesCommutativeRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesDivisionRing a = AbidesDivisionRing {getAbidesDivisionRing :: a}
-  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesEuclideanRing a = AbidesEuclideanRing {getAbidesEuclideanRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
 
 newtype AbidesField a = AbidesField {getAbidesField :: a}
-  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary)
+  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON)
 
 
 
@@ -75,6 +78,12 @@ deriving instance Generic (Operation (AbidesSemigroup a))
 deriving instance Show a => Show (Operation (AbidesSemigroup a))
 instance Arbitrary a => Arbitrary (Operation (AbidesSemigroup a)) where
   arbitrary = SemigroupAssociative <$> arbitrary <*> arbitrary
+instance ToJSON a => ToJSON (Operation (AbidesSemigroup a)) where
+  toJSON op = case op of
+    SemigroupAssociative y z -> object ["y" .= y, "z" .= z]
+instance FromJSON a => FromJSON (Operation (AbidesSemigroup a)) where
+  parseJSON (Object o) = SemigroupAssociative <$> o .: "y" <*> o .: "z"
+  parseJSON x = typeMismatch "Operation (AbidesSemigroup a)" x
 
 instance (Monoid a, Eq a) => SymbioteOperation (AbidesMonoid a) Bool where
   data Operation (AbidesMonoid a)
@@ -93,6 +102,18 @@ instance Arbitrary a => Arbitrary (Operation (AbidesMonoid a)) where
     , pure MonoidLeftIdentity
     , pure MonoidRightIdentity
     ]
+instance ToJSON a => ToJSON (Operation (AbidesMonoid a)) where
+  toJSON op = case op of
+    MonoidSemigroup op' -> object ["semigroup" .= op']
+    MonoidLeftIdentity -> String "leftIdentity"
+    MonoidRightIdentity -> String "rightIdentity"
+instance FromJSON a => FromJSON (Operation (AbidesMonoid a)) where
+  parseJSON (Object o) = MonoidSemigroup <$> o .: "semigroup"
+  parseJSON x@(String s)
+    | s == "leftIdentity" = pure MonoidLeftIdentity
+    | s == "rightIdentity" = pure MonoidRightIdentity
+    | otherwise = typeMismatch "Operation (AbidesMonoid a)" x
+  parseJSON x = typeMismatch "Operation (AbidesMonoid a)" x
 
 instance (Eq a) => SymbioteOperation (AbidesEq a) Bool where
   data Operation (AbidesEq a)
