@@ -12,10 +12,11 @@
 import Test.Tasty (defaultMain, testGroup, TestTree)
 import Test.Tasty.HUnit (testCase)
 import Test.Serialization.Symbiote
-  ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), EitherOp
+  ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), SimpleSerialization
   , First, Second, simpleTest)
 import Test.Serialization.Symbiote.Cereal ()
 import Test.Serialization.Symbiote.Aeson ()
+import Test.Serialization.Symbiote.Abides (AbidesMonoid (..), AbidesCommutativeRing (..), AbidesField (..))
 import Test.QuickCheck (Arbitrary (..))
 import Test.QuickCheck.Gen (elements, oneof, scale, getSize)
 import Test.QuickCheck.Instances ()
@@ -48,13 +49,13 @@ tests = testGroup "All Tests"
       , testCase "List over various" (simpleTest listSuite)
       ]
       where
-        unitSuite :: SymbioteT (EitherOp ()) IO ()
+        unitSuite :: SymbioteT (SimpleSerialization ()) IO ()
         unitSuite = register "Unit" 100 (Proxy :: Proxy ())
-        intSuite :: SymbioteT (EitherOp Int) IO ()
+        intSuite :: SymbioteT (SimpleSerialization Int) IO ()
         intSuite = register "Int" 100 (Proxy :: Proxy Int)
-        doubleSuite :: SymbioteT (EitherOp Double) IO ()
+        doubleSuite :: SymbioteT (SimpleSerialization Double) IO ()
         doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
-        listSuite :: SymbioteT (EitherOp [Int]) IO ()
+        listSuite :: SymbioteT (SimpleSerialization [Int]) IO ()
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
     bytestringTests :: TestTree
     bytestringTests = testGroup "ByteString Tests"
@@ -86,7 +87,7 @@ tests = testGroup "All Tests"
         listSuite :: SymbioteT Json.Value IO ()
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
 
-instance SymbioteOperation () where
+instance SymbioteOperation () () where
   data Operation () = UnitId
   perform UnitId () = ()
 deriving instance Show (Operation ())
@@ -94,77 +95,56 @@ deriving instance Generic (Operation ())
 instance Arbitrary (Operation ()) where
   arbitrary = pure UnitId
 
-instance SymbioteOperation Int where
+instance SymbioteOperation Int Bool where
   data Operation Int
-    = AddInt Int
-    | SubInt Int
-    | DivInt Int
-    | MulInt Int
-    | ModInt Int
+    = IntCommutativeRing (Operation (AbidesCommutativeRing Int))
   perform op x = case op of
-    AddInt y -> x + y
-    SubInt y -> x - y
-    DivInt y -> if y == 0 then 0 else x `div` y
-    MulInt y -> x * y
-    ModInt y -> if y == 0 then 0 else x `mod` y
+    IntCommutativeRing op' -> perform op' (AbidesCommutativeRing x)
 deriving instance Show (Operation Int)
 deriving instance Generic (Operation Int)
 instance Cereal.Serialize (Operation Int)
 instance Json.ToJSON (Operation Int)
 instance Json.FromJSON (Operation Int)
 instance Arbitrary (Operation Int) where
-  arbitrary = oneof
-    [ AddInt <$> arbitrary
-    , SubInt <$> arbitrary
-    , DivInt <$> arbitrary
-    , MulInt <$> arbitrary
-    , ModInt <$> arbitrary
-    ]
+  arbitrary = IntCommutativeRing <$> arbitrary
 
 
 instance SymbioteOperation Double where
   data Operation Double
-    = AddDouble Double
-    | SubDouble Double
-    | DivDouble Double
-    | MulDouble Double
-    | RecipDouble
+    = DoubleField (Operation (AbidesField Double))
   perform op x = case op of
-    AddDouble y -> x + y
-    SubDouble y -> x - y
-    DivDouble y -> if y == 0.0 then 0.0 else x / y
-    MulDouble y -> x * y
-    RecipDouble -> if x == 0.0 then 0.0 else recip x
+    DoubleField op' -> perform op' (AbidesField x)
 deriving instance Show (Operation Double)
 deriving instance Generic (Operation Double)
 instance Cereal.Serialize (Operation Double)
 instance Json.ToJSON (Operation Double)
 instance Json.FromJSON (Operation Double)
 instance Arbitrary (Operation Double) where
-  arbitrary = oneof
-    [ AddDouble <$> arbitrary
-    , SubDouble <$> arbitrary
-    , DivDouble <$> arbitrary
-    , MulDouble <$> arbitrary
-    , pure RecipDouble
-    ]
+  arbitrary = DoubleField <$> arbitrary
 
 instance SymbioteOperation [a] where
   data Operation [a]
-    = ReverseList
+    = ListMonoid (Operation (AbidesMonoid [a]))
+    | ReverseList
     | InitList
     | TailList
   perform op x = case op of
+    ListMonoid op' -> perform op' (AbidesMonoid x)
     ReverseList -> reverse x
-    InitList -> if length x == 0 then [] else init x
-    TailList -> if length x == 0 then [] else tail x
+    InitList -> if null x then [] else init x
+    TailList -> if null x then [] else tail x
 deriving instance Show (Operation [a])
 deriving instance Generic (Operation [a])
 instance Cereal.Serialize (Operation [a])
 instance Json.ToJSON (Operation [a])
 instance Json.FromJSON (Operation [a])
 instance Arbitrary (Operation [a]) where
-  arbitrary = elements [ReverseList, InitList, TailList]
+  arbitrary = oneof
+    [ pure ReverseList
+    , pure InitList
+    , pure TailList
+    , ListMonoid <$> arbitrary
+    ]
 
 instance SymbioteOperation Json.Value where
   data Operation Json.Value = JsonId
