@@ -109,7 +109,7 @@ instance Arbitrary (Operation Int) where
   arbitrary = IntCommutativeRing <$> arbitrary
 
 
-instance SymbioteOperation Double where
+instance SymbioteOperation Double Bool where
   data Operation Double
     = DoubleField (Operation (AbidesField Double))
   perform op x = case op of
@@ -122,23 +122,23 @@ instance Json.FromJSON (Operation Double)
 instance Arbitrary (Operation Double) where
   arbitrary = DoubleField <$> arbitrary
 
-instance SymbioteOperation [a] where
+instance Eq a => SymbioteOperation [a] (Either Bool [a]) where
   data Operation [a]
     = ListMonoid (Operation (AbidesMonoid [a]))
     | ReverseList
     | InitList
     | TailList
   perform op x = case op of
-    ListMonoid op' -> perform op' (AbidesMonoid x)
-    ReverseList -> reverse x
-    InitList -> if null x then [] else init x
-    TailList -> if null x then [] else tail x
-deriving instance Show (Operation [a])
+    ListMonoid op' -> Left (perform op' (AbidesMonoid x))
+    ReverseList -> Right (reverse x)
+    InitList -> Right $ if null x then [] else init x
+    TailList -> Right $ if null x then [] else tail x
+deriving instance Show a => Show (Operation [a])
 deriving instance Generic (Operation [a])
 instance Cereal.Serialize (Operation [a])
 instance Json.ToJSON (Operation [a])
 instance Json.FromJSON (Operation [a])
-instance Arbitrary (Operation [a]) where
+instance Arbitrary a => Arbitrary (Operation [a]) where
   arbitrary = oneof
     [ pure ReverseList
     , pure InitList
@@ -146,14 +146,14 @@ instance Arbitrary (Operation [a]) where
     , ListMonoid <$> arbitrary
     ]
 
-instance SymbioteOperation Json.Value where
+instance SymbioteOperation Json.Value Json.Value where
   data Operation Json.Value = JsonId
   perform _ x = x
 deriving instance Show (Operation Json.Value)
 deriving instance Generic (Operation Json.Value)
 instance Arbitrary (Operation Json.Value) where
   arbitrary = pure JsonId
-instance Symbiote Json.Value LBS.ByteString where
+instance Symbiote Json.Value Json.Value LBS.ByteString where
   encode = Json.encode
   decode = Json.decode
   encodeOp _ = "id"
