@@ -136,8 +136,8 @@ instance Eq a => SymbioteOperation [a] (Either Bool [a]) where
 deriving instance Show a => Show (Operation [a])
 deriving instance Generic (Operation [a])
 instance Cereal.Serialize (Operation [a])
-instance Json.ToJSON (Operation [a])
-instance Json.FromJSON (Operation [a])
+instance Json.ToJSON a => Json.ToJSON (Operation [a])
+instance Json.FromJSON a => Json.FromJSON (Operation [a])
 instance Arbitrary a => Arbitrary (Operation [a]) where
   arbitrary = oneof
     [ pure ReverseList
