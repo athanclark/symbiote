@@ -22,8 +22,10 @@ module Test.Serialization.Symbiote.Abides where
 
 import Data.Aeson (ToJSON (..), FromJSON (..), object, (.=), (.:), Value (Object, String))
 import Data.Aeson.Types (typeMismatch)
+import Data.Serialize (Serialize (put,get))
+import Data.Serialize.Put (putWord8)
+import Data.Serialize.Get (getWord8)
 import Control.Applicative ((<|>))
-import Control.Category (Category)
 import qualified Test.Abides.Data.Semigroup as Semigroup
 import qualified Test.Abides.Data.Monoid as Monoid
 import qualified Test.Abides.Data.Eq as Eq
@@ -36,42 +38,42 @@ import qualified Test.Abides.Data.DivisionRing as DivisionRing
 import qualified Test.Abides.Data.EuclideanRing as EuclideanRing
 import Test.Serialization.Symbiote.Core (SymbioteOperation (Operation, perform))
 import Test.QuickCheck (Arbitrary (..))
-import Test.QuickCheck.Gen (oneof, elements)
+import Test.QuickCheck.Gen (oneof)
 import GHC.Generics (Generic)
 
 
 newtype AbidesSemigroup a = AbidesSemigroup {getAbidesSemigroup :: a}
-  deriving (Generic, Eq, Show, Semigroup, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Semigroup, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesMonoid a = AbidesMonoid {getAbidesMonoid :: a}
-  deriving (Generic, Eq, Show, Semigroup, Monoid, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Semigroup, Monoid, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesEq a = AbidesEq {getAbidesEq :: a}
-  deriving (Generic, Eq, Show, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesOrd a = AbidesOrd {getAbidesOrd :: a}
-  deriving (Generic, Eq, Show, Ord, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Ord, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesEnum a = AbidesEnum {getAbidesEnum :: a}
-  deriving (Generic, Eq, Ord, Show, Enum, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Ord, Show, Enum, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesSemiring a = AbidesSemiring {getAbidesSemiring :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesRing a = AbidesRing {getAbidesRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesCommutativeRing a = AbidesCommutativeRing {getAbidesCommutativeRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesDivisionRing a = AbidesDivisionRing {getAbidesDivisionRing :: a}
-  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesEuclideanRing a = AbidesEuclideanRing {getAbidesEuclideanRing :: a}
-  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Arbitrary, ToJSON, FromJSON, Serialize)
 
 newtype AbidesField a = AbidesField {getAbidesField :: a}
-  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON)
+  deriving (Generic, Eq, Show, Num, Fractional, Arbitrary, ToJSON, FromJSON, Serialize)
 
 
 
@@ -93,6 +95,10 @@ instance FromJSON a => FromJSON (Operation (AbidesSemigroup a)) where
     o' <- o .: "associative"
     SemigroupAssociative <$> o' .: "y" <*> o' .: "z"
   parseJSON x = typeMismatch "Operation (AbidesSemigroup a)" x
+instance Serialize a => Serialize (Operation (AbidesSemigroup a)) where
+  put op = case op of
+    SemigroupAssociative y z -> put y *> put z
+  get = SemigroupAssociative <$> get <*> get
 
 instance (Monoid a, Eq a) => SymbioteOperation (AbidesMonoid a) Bool where
   data Operation (AbidesMonoid a)
@@ -123,6 +129,18 @@ instance FromJSON a => FromJSON (Operation (AbidesMonoid a)) where
     | s == "rightIdentity" = pure MonoidRightIdentity
     | otherwise = typeMismatch "Operation (AbidesMonoid a)" x
   parseJSON x = typeMismatch "Operation (AbidesMonoid a)" x
+instance Serialize a => Serialize (Operation (AbidesMonoid a)) where
+  put op = case op of
+    MonoidSemigroup op' -> putWord8 0 *> put op'
+    MonoidLeftIdentity -> putWord8 1
+    MonoidRightIdentity -> putWord8 2
+  get = do
+    x <- getWord8
+    case x of
+      0 -> MonoidSemigroup <$> get
+      1 -> pure MonoidLeftIdentity
+      2 -> pure MonoidRightIdentity
+      _ -> fail "Operation (AbidesMonoid a)"
 
 instance (Eq a) => SymbioteOperation (AbidesEq a) Bool where
   data Operation (AbidesEq a)
@@ -162,6 +180,20 @@ instance FromJSON a => FromJSON (Operation (AbidesEq a)) where
     | s == "reflexive" = pure EqReflexive
     | otherwise = typeMismatch "Operation (AbidesEq a)" x
   parseJSON x = typeMismatch "Operation (AbidesEq a)" x
+instance Serialize a => Serialize (Operation (AbidesEq a)) where
+  put op = case op of
+    EqSymmetry y -> putWord8 0 *> put y
+    EqReflexive -> putWord8 1
+    EqTransitive y z -> putWord8 2 *> put y *> put z
+    EqNegation y -> putWord8 3 *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> EqSymmetry <$> get
+      1 -> pure EqReflexive
+      2 -> EqTransitive <$> get <*> get
+      3 -> EqNegation <$> get
+      _ -> fail "Operation (AbidesEq a)"
 
 instance (Ord a) => SymbioteOperation (AbidesOrd a) Bool where
   data Operation (AbidesOrd a)
@@ -196,6 +228,18 @@ instance FromJSON a => FromJSON (Operation (AbidesOrd a)) where
     | s == "reflexive" = pure OrdReflexive
     | otherwise = typeMismatch "Operation (AbidesOrd a)" x
   parseJSON x = typeMismatch "Operation (AbidesOrd a)" x
+instance Serialize a => Serialize (Operation (AbidesOrd a)) where
+  put op = case op of
+    OrdReflexive -> putWord8 0
+    OrdAntiSymmetry y -> putWord8 1 *> put y
+    OrdTransitive y z -> putWord8 2 *> put y *> put z
+  get = do
+    x <- getWord8
+    case x of
+      0 -> pure OrdReflexive
+      1 -> OrdAntiSymmetry <$> get
+      2 -> OrdTransitive <$> get <*> get
+      _ -> fail "Operation (AbidesOrd a)"
 
 instance (Enum a, Ord a) => SymbioteOperation (AbidesEnum a) Bool where
   data Operation (AbidesEnum a)
@@ -226,6 +270,18 @@ instance FromJSON a => FromJSON (Operation (AbidesEnum a)) where
     | s == "succpred" = pure EnumSuccPred
     | otherwise = typeMismatch "Operation (AbidesEnum a)" x
   parseJSON x = typeMismatch "Operation (AbidesEnum a)" x
+instance Serialize a => Serialize (Operation (AbidesEnum a)) where
+  put op = case op of
+    EnumCompareHom y -> putWord8 0 *> put y
+    EnumPredSucc -> putWord8 1
+    EnumSuccPred -> putWord8 2
+  get = do
+    x <- getWord8
+    case x of
+      0 -> EnumCompareHom <$> get
+      1 -> pure EnumPredSucc
+      2 -> pure EnumSuccPred
+      _ -> fail "Operation (AbidesEnum a)"
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesSemiring a) Bool where
   data Operation (AbidesSemiring a)
@@ -276,6 +332,22 @@ instance FromJSON a => FromJSON (Operation (AbidesSemiring a)) where
     | s == "annihilation" = pure SemiringAnnihilation
     | otherwise = typeMismatch "Operation (AbidesSemiring a)" x
   parseJSON x = typeMismatch "Operation (AbidesSemiring a)" x
+instance Serialize a => Serialize (Operation (AbidesSemiring a)) where
+  put op = case op of
+    SemiringCommutativeMonoid y z -> putWord8 0 *> put y *> put z
+    SemiringMonoid y z -> putWord8 1 *> put y *> put z
+    SemiringLeftDistributive y z -> putWord8 2 *> put y *> put z
+    SemiringRightDistributive y z -> putWord8 3 *> put y *> put z
+    SemiringAnnihilation -> putWord8 4
+  get = do
+    x <- getWord8
+    case x of
+      0 -> SemiringCommutativeMonoid <$> get <*> get
+      1 -> SemiringMonoid <$> get <*> get
+      2 -> SemiringLeftDistributive <$> get <*> get
+      3 -> SemiringRightDistributive <$> get <*> get
+      4 -> pure SemiringAnnihilation
+      _ -> fail "Operation (AbidesSemiring a)"
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesRing a) Bool where
   data Operation (AbidesRing a)
@@ -301,6 +373,16 @@ instance FromJSON a => FromJSON (Operation (AbidesRing a)) where
     | s == "additiveInverse" = pure RingAdditiveInverse
     | otherwise = typeMismatch "Operation (AbidesRing a)" x
   parseJSON x = typeMismatch "Operation (AbidesRing a)" x
+instance Serialize a => Serialize (Operation (AbidesRing a)) where
+  put op = case op of
+    RingSemiring op' -> putWord8 0 *> put op'
+    RingAdditiveInverse -> putWord8 1
+  get = do
+    x <- getWord8
+    case x of
+      0 -> RingSemiring <$> get
+      1 -> pure RingAdditiveInverse
+      _ -> fail "Operation (AbidesRing a)"
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesCommutativeRing a) Bool where
   data Operation (AbidesCommutativeRing a)
@@ -326,6 +408,16 @@ instance FromJSON a => FromJSON (Operation (AbidesCommutativeRing a)) where
       ring = CommutativeRingRing <$> o .: "ring"
       commutative = CommutativeRingCommutative <$> o .: "commutative"
   parseJSON x = typeMismatch "Operation (AbidesCommutativeRing a)" x
+instance Serialize a => Serialize (Operation (AbidesCommutativeRing a)) where
+  put op = case op of
+    CommutativeRingRing op' -> putWord8 0 *> put op'
+    CommutativeRingCommutative y -> putWord8 1 *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> CommutativeRingRing <$> get
+      1 -> CommutativeRingCommutative <$> get
+      _ -> fail "Operation (AbidesCommutativeRing a)"
 
 instance (Fractional a, Eq a) => SymbioteOperation (AbidesDivisionRing a) Bool where
   data Operation (AbidesDivisionRing a)
