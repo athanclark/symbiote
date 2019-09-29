@@ -3,8 +3,10 @@
   , TypeFamilies
   , DeriveGeneric
   , NamedFieldPuns
+  , RecordWildCards
   , FlexibleContexts
   , FlexibleInstances
+  , OverloadedStrings
   , StandaloneDeriving
   , ScopedTypeVariables
   , UndecidableInstances
@@ -93,16 +95,22 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (unpack)
 import Data.Proxy (Proxy (..))
+import Data.Aeson (ToJSON (..), FromJSON (..), (.=), object, (.:), Value (Object, String))
+import Data.Aeson.Types (typeMismatch)
+import Data.Serialize (Serialize (..))
+import Data.Serialize.Put (putWord8)
+import Data.Serialize.Get (getWord8)
 import Text.Printf (printf)
 import Control.Concurrent.STM
   (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
 import Control.Concurrent.Async (async, wait)
+import Control.Applicative ((<|>))
 import Control.Monad (void)
 import Control.Monad.Trans.Control (MonadBaseControl, liftBaseWith)
 import Control.Monad.State (modify')
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import Test.QuickCheck.Gen (Gen)
+import Test.QuickCheck.Gen (Gen, oneof)
 import GHC.Generics (Generic)
 
 
@@ -167,14 +175,88 @@ data Generating s
   | YourTurn
   | ImFinished
   | GeneratingNoParseOperated s
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+instance Arbitrary s => Arbitrary (Generating s) where
+  arbitrary = oneof
+    [ Generated <$> arbitrary <*> arbitrary
+    , BadResult <$> arbitrary
+    , pure YourTurn
+    , pure ImFinished
+    , GeneratingNoParseOperated <$> arbitrary
+    ]
+instance ToJSON s => ToJSON (Generating s) where
+  toJSON x = case x of
+    Generated{..} -> object ["generated" .= object ["value" .= genValue, "operation" .= genOperation]]
+    BadResult r -> object ["badResult" .= r]
+    YourTurn -> String "yourTurn"
+    ImFinished -> String "imFinished"
+    GeneratingNoParseOperated r -> object ["noParseOperated" .= r]
+instance FromJSON s => FromJSON (Generating s) where
+  parseJSON (Object o) = generated <|> badResult <|> noParseOperated
+    where
+      generated = do
+        o' <- o .: "generated"
+        Generated <$> o' .: "value" <*> o' .: "operation"
+      badResult = BadResult <$> o .: "badResult"
+      noParseOperated = GeneratingNoParseOperated <$> o .: "noParseOperated"
+  parseJSON x@(String s)
+    | s == "imFinished" = pure ImFinished
+    | s == "yourTurn" = pure YourTurn
+    | otherwise = typeMismatch "Generating s" x
+  parseJSON x = typeMismatch "Generating s" x
+instance Serialize s => Serialize (Generating s) where
+  put x = case x of
+    Generated{..} -> putWord8 0 *> put genValue *> put genOperation
+    BadResult r -> putWord8 1 *> put r
+    YourTurn -> putWord8 2
+    ImFinished -> putWord8 3
+    GeneratingNoParseOperated r -> putWord8 4 *> put r
+  get = do
+    x <- getWord8
+    case x of
+      0 -> Generated <$> get <*> get
+      1 -> BadResult <$> get
+      2 -> pure YourTurn
+      3 -> pure ImFinished
+      4 -> GeneratingNoParseOperated <$> get
+      _ -> fail "Generating s"
 
 -- | Messages sent by a peer during their operating phase
 data Operating s
   = Operated s -- ^ Serialized value after operation
   | OperatingNoParseValue s
   | OperatingNoParseOperation s
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+instance Arbitrary s => Arbitrary (Operating s) where
+  arbitrary = oneof
+    [ Operated <$> arbitrary
+    , OperatingNoParseValue <$> arbitrary
+    , OperatingNoParseOperation <$> arbitrary
+    ]
+instance ToJSON s => ToJSON (Operating s) where
+  toJSON x = case x of
+    Operated r -> object ["operated" .= r]
+    OperatingNoParseValue r -> object ["noParseValue" .= r]
+    OperatingNoParseOperation r -> object ["noParseOperation" .= r]
+instance FromJSON s => FromJSON (Operating s) where
+  parseJSON (Object o) = operated <|> noParseValue <|> noParseOperation
+    where
+      operated = Operated <$> o .: "operated"
+      noParseValue = OperatingNoParseValue <$> o .: "noParseValue"
+      noParseOperation = OperatingNoParseOperation <$> o .: "noParseOperation"
+  parseJSON x = typeMismatch "Operating s" x
+instance Serialize s => Serialize (Operating s) where
+  put x = case x of
+    Operated y -> putWord8 0 *> put y
+    OperatingNoParseValue r -> putWord8 1 *> put r
+    OperatingNoParseOperation r -> putWord8 2 *> put r
+  get = do
+    x <- getWord8
+    case x of
+      0 -> Operated <$> get
+      1 -> OperatingNoParseValue <$> get
+      2 -> OperatingNoParseOperation <$> get
+      _ -> fail "Operating s"
 
 -- | Messages sent by the first peer
 data First s
@@ -187,7 +269,41 @@ data First s
     { firstOperatingTopic :: Topic
     , firstOperating :: Operating s
     }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+instance Arbitrary s => Arbitrary (First s) where
+  arbitrary = oneof
+    [ AvailableTopics <$> arbitrary
+    , FirstGenerating <$> arbitrary <*> arbitrary
+    , FirstOperating <$> arbitrary <*> arbitrary
+    ]
+instance ToJSON s => ToJSON (First s) where
+  toJSON x = case x of
+    AvailableTopics ts -> object ["availableTopics" .= ts]
+    FirstGenerating t y -> object ["firstGenerating" .= object ["topic" .= t, "generating" .= y]]
+    FirstOperating t y -> object ["firstOperating" .= object ["topic" .= t, "operating" .= y]]
+instance FromJSON s => FromJSON (First s) where
+  parseJSON (Object o) = availableTopics <|> firstGenerating' <|> firstOperating'
+    where
+      availableTopics = AvailableTopics <$> o .: "availableTopics"
+      firstGenerating' = do
+        o' <- o .: "firstGenerating"
+        FirstGenerating <$> o' .: "topic" <*> o' .: "generating"
+      firstOperating' = do
+        o' <- o .: "firstOperating"
+        FirstOperating <$> o' .: "topic" <*> o' .: "operating"
+  parseJSON x = typeMismatch "First s" x
+instance Serialize s => Serialize (First s) where
+  put x = case x of
+    AvailableTopics ts -> putWord8 0 *> put ts
+    FirstGenerating t y -> putWord8 1 *> put t *> put y
+    FirstOperating t y -> putWord8 2 *> put t *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> AvailableTopics <$> get
+      1 -> FirstGenerating <$> get <*> get
+      2 -> FirstOperating <$> get <*> get
+      _ -> fail "First s"
 
 getFirstGenerating :: First s -> Maybe (Topic, Generating s)
 getFirstGenerating x = case x of
@@ -212,7 +328,48 @@ data Second s
     { secondGeneratingTopic :: Topic
     , secondGenerating :: Generating s
     }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+instance Arbitrary s => Arbitrary (Second s) where
+  arbitrary = oneof
+    [ BadTopics <$> arbitrary
+    , pure Start
+    , SecondOperating <$> arbitrary <*> arbitrary
+    , SecondGenerating <$> arbitrary <*> arbitrary
+    ]
+instance ToJSON s => ToJSON (Second s) where
+  toJSON x = case x of
+    BadTopics ts -> object ["badTopics" .= ts]
+    Start -> String "start"
+    SecondOperating t y -> object ["secondOperating" .= object ["topic" .= t, "operating" .= y]]
+    SecondGenerating t y -> object ["secondGenerating" .= object ["topic" .= t, "generating" .= y]]
+instance FromJSON s => FromJSON (Second s) where
+  parseJSON (Object o) = badTopics <|> secondOperating' <|> secondGenerating'
+    where
+      badTopics = BadTopics <$> o .: "badTopics"
+      secondOperating' = do
+        o' <- o .: "secondOperating"
+        SecondOperating <$> o' .: "topic" <*> o' .: "operating"
+      secondGenerating' = do
+        o' <- o .: "secondGenerating"
+        SecondGenerating <$> o' .: "topic" <*> o' .: "generating"
+  parseJSON x@(String s)
+    | s == "start" = pure Start
+    | otherwise = typeMismatch "Second s" x
+  parseJSON x = typeMismatch "Second s" x
+instance Serialize s => Serialize (Second s) where
+  put x = case x of
+    BadTopics ts -> putWord8 0 *> put ts
+    Start -> putWord8 1
+    SecondOperating t y -> putWord8 2 *> put t *> put y
+    SecondGenerating t y -> putWord8 3 *> put t *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> BadTopics <$> get
+      1 -> pure Start
+      2 -> SecondOperating <$> get <*> get
+      3 -> SecondGenerating <$> get <*> get
+      _ -> fail "Second s"
 
 getSecondGenerating :: Second s -> Maybe (Topic, Generating s)
 getSecondGenerating x = case x of

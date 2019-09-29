@@ -17,6 +17,9 @@ import Data.String (IsString)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Proxy (Proxy (..))
+import Data.Aeson (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
+import Data.Serialize (Serialize)
+import Data.Serialize.Text ()
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Concurrent.STM
   (TVar, readTVar, readTVarIO, modifyTVar', atomically)
@@ -24,6 +27,7 @@ import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Monad.State (StateT, execStateT)
 import Test.QuickCheck.Arbitrary (Arbitrary)
 import Test.QuickCheck.Gen (Gen, resize)
+import Test.QuickCheck.Instances ()
 import qualified Test.QuickCheck.Gen as QC
 
 
@@ -44,7 +48,7 @@ class SymbioteOperation a o => Symbiote a o s | a -> o where
 
 -- | Unique name of a type, for a suite of tests
 newtype Topic = Topic Text
-  deriving (Eq, Ord, Show, IsString)
+  deriving (Eq, Ord, Show, IsString, Arbitrary, ToJSON, FromJSON, ToJSONKey, FromJSONKey, Serialize)
 
 -- | Protocol state for a particular topic
 data SymbioteProtocol a s

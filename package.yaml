@@ -26,12 +26,14 @@ dependencies:
 - async
 - bytestring
 - cereal
+- cereal-text
 - containers
 - monad-control
 - mtl
 - stm
 - text
 - QuickCheck
+- quickcheck-instances
 
 library:
   source-dirs: src
@@ -49,8 +51,9 @@ tests:
     - aeson
     - bytestring
     - cereal
+    - QuickCheck
+    - quickcheck-instances
     - stm
     - tasty
     - tasty-hunit
-    - QuickCheck
-    - quickcheck-instances
+    - tasty-quickcheck

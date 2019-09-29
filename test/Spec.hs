@@ -1,22 +1,23 @@
 {-# LANGUAGE
-    OverloadedStrings
-  , MultiParamTypeClasses
-  , TypeFamilies
+    TypeFamilies
+  , DeriveGeneric
+  , FlexibleContexts
+  , OverloadedStrings
   , FlexibleInstances
   , StandaloneDeriving
-  , FlexibleContexts
   , UndecidableInstances
-  , DeriveGeneric
+  , MultiParamTypeClasses
   #-}
 
 import Test.Tasty (defaultMain, testGroup, TestTree)
 import Test.Tasty.HUnit (testCase)
+import Test.Tasty.QuickCheck (testProperty)
 import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), SimpleSerialization
-  , First, Second, simpleTest, defaultSuccess, defaultFailure, defaultProgress)
+  , First, Second, Generating, Operating, Topic, simpleTest, defaultSuccess, defaultFailure, defaultProgress)
 import Test.Serialization.Symbiote.Cereal ()
 import Test.Serialization.Symbiote.Aeson ()
-import Test.Serialization.Symbiote.Abides (AbidesMonoid (..), AbidesCommutativeRing (..), AbidesField (..))
+import Test.Serialization.Symbiote.Abides
 import Test.QuickCheck (Arbitrary (..))
 import Test.QuickCheck.Gen (elements, oneof, scale, getSize)
 import Test.QuickCheck.Instances ()
@@ -36,9 +37,59 @@ main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "All Tests"
-  [ simpleTests
-  , bytestringTests
-  , jsonTests
+  [ testGroup "Symbiote Sanity Checks"
+    [ simpleTests
+    , bytestringTests
+    , jsonTests
+    ]
+  , testGroup "Local Isomorphisms"
+    [ testGroup "Json" $
+      let go (n,p) = testProperty n (jsonIso p)
+      in  [ testGroup "Abides"
+            [ go ("AbidesSemigroup [Int]", Proxy :: Proxy (AbidesSemigroup [Int]))
+            , go ("AbidesMonoid [Int]", Proxy :: Proxy (AbidesMonoid [Int]))
+            , go ("AbidesEq Int", Proxy :: Proxy (AbidesEq Int))
+            , go ("AbidesOrd Int", Proxy :: Proxy (AbidesOrd Int))
+            , go ("AbidesEnum Int", Proxy :: Proxy (AbidesEnum Int))
+            , go ("AbidesSemiring Int", Proxy :: Proxy (AbidesSemiring Int))
+            , go ("AbidesRing Int", Proxy :: Proxy (AbidesRing Int))
+            , go ("AbidesCommutativeRing Int", Proxy :: Proxy (AbidesCommutativeRing Int))
+            , go ("AbidesDivisionRing Int", Proxy :: Proxy (AbidesDivisionRing Int))
+            , go ("AbidesEuclideanRing Int", Proxy :: Proxy (AbidesEuclideanRing Int))
+            , go ("AbidesField Int", Proxy :: Proxy (AbidesField Int))
+            ]
+          , testGroup "Symbiote"
+            [ go ("Generating Int", Proxy :: Proxy (Generating Int))
+            , go ("Operating Int", Proxy :: Proxy (Operating Int))
+            , go ("First Int", Proxy :: Proxy (First Int))
+            , go ("Second Int", Proxy :: Proxy (Second Int))
+            , go ("Topic", Proxy :: Proxy Topic)
+            ]
+          ]
+    , testGroup "Cereal" $
+      let go (n,p) = testProperty n (cerealIso p)
+      in  [ testGroup "Abides"
+            [ go ("AbidesSemigroup [Int]", Proxy :: Proxy (AbidesSemigroup [Int]))
+            , go ("AbidesMonoid [Int]", Proxy :: Proxy (AbidesMonoid [Int]))
+            , go ("AbidesEq Int", Proxy :: Proxy (AbidesEq Int))
+            , go ("AbidesOrd Int", Proxy :: Proxy (AbidesOrd Int))
+            , go ("AbidesEnum Int", Proxy :: Proxy (AbidesEnum Int))
+            , go ("AbidesSemiring Int", Proxy :: Proxy (AbidesSemiring Int))
+            , go ("AbidesRing Int", Proxy :: Proxy (AbidesRing Int))
+            , go ("AbidesCommutativeRing Int", Proxy :: Proxy (AbidesCommutativeRing Int))
+            , go ("AbidesDivisionRing Int", Proxy :: Proxy (AbidesDivisionRing Int))
+            , go ("AbidesEuclideanRing Int", Proxy :: Proxy (AbidesEuclideanRing Int))
+            , go ("AbidesField Int", Proxy :: Proxy (AbidesField Int))
+            ]
+          , testGroup "Symbiote"
+            [ go ("Generating Int", Proxy :: Proxy (Generating Int))
+            , go ("Operating Int", Proxy :: Proxy (Operating Int))
+            , go ("First Int", Proxy :: Proxy (First Int))
+            , go ("Second Int", Proxy :: Proxy (Second Int))
+            , go ("Topic", Proxy :: Proxy Topic)
+            ]
+          ]
+    ]
   ]
   where
     simpleTests :: TestTree
@@ -175,3 +226,12 @@ instance Arbitrary Json.Value where
             , Json.Array <$> scale (`div` 2) arbitrary
             , Json.Object <$> scale (`div` 2) arbitrary
             ]
+
+
+
+jsonIso :: Json.ToJSON a => Json.FromJSON a => Eq a => Proxy a -> a -> Bool
+jsonIso Proxy x = Json.decode (Json.encode x) == Just x
+
+
+cerealIso :: Cereal.Serialize a => Eq a => Proxy a -> a -> Bool
+cerealIso Proxy x = Cereal.decode (Cereal.encode x) == Right x
