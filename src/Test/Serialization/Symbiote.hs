@@ -81,7 +81,7 @@ and "how to receive" messages, and likewise how to report status.
 module Test.Serialization.Symbiote
   ( SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, SymbioteT, register
   , firstPeer, secondPeer, First (..), Second (..), Generating (..), Operating (..), Failure (..)
-  , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest
+  , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest, simpleTest'
   ) where
 
 import Test.Serialization.Symbiote.Core
@@ -266,7 +266,7 @@ defaultProgress :: Topic -> Float -> IO ()
 defaultProgress (Topic t) p = putStrLn $ "Topic " ++ unpack t ++ ": " ++ printf "%.2f" (p * 100.0) ++ "%"
 
 -- | Do nothing
-nullProgress :: Topic -> Float -> IO ()
+nullProgress :: Applicative m => Topic -> Float -> m ()
 nullProgress _ _ = pure ()
 
 
@@ -607,7 +607,22 @@ simpleTest :: MonadBaseControl IO m
            => MonadIO m
            => Show s
            => SymbioteT s m () -> m ()
-simpleTest suite = do
+simpleTest =
+  simpleTest'
+    (const (pure ()))
+    (liftIO . defaultFailure)
+    (liftIO . defaultFailure)
+    nullProgress
+
+simpleTest' :: MonadBaseControl IO m
+            => MonadIO m
+            => Show s
+            => (Topic -> m ()) -- ^ report topic success
+            -> (Failure Second s -> m ()) -- ^ report topic failure from first (sees second)
+            -> (Failure First s -> m ()) -- ^ report topic failure from second (sees first)
+            -> (Topic -> Float -> m ()) -- ^ report topic progress
+            -> SymbioteT s m () -> m ()
+simpleTest' onSuccess onFailureSecond onFailureFirst onProgress suite = do
   firstChan <- liftIO $ atomically newTChan
   secondChan <- liftIO $ atomically newTChan
 
@@ -615,12 +630,12 @@ simpleTest suite = do
     void $ runInBase $ firstPeer
       (encodeAndSendChan firstChan)
       (receiveAndDecodeChan secondChan)
-      (const (pure ())) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+      onSuccess onFailureSecond onProgress
       suite
   secondPeer
     (encodeAndSendChan secondChan)
     (receiveAndDecodeChan firstChan)
-    (const (pure ())) (liftIO . defaultFailure) (\a b -> liftIO $ nullProgress a b)
+    onSuccess onFailureFirst onProgress
     suite
   liftIO (wait t)
   where

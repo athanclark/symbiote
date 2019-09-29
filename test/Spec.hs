@@ -13,7 +13,7 @@ import Test.Tasty (defaultMain, testGroup, TestTree)
 import Test.Tasty.HUnit (testCase)
 import Test.Serialization.Symbiote
   ( SymbioteT, register, firstPeer, secondPeer, SymbioteOperation (..), Symbiote (..), SimpleSerialization
-  , First, Second, simpleTest)
+  , First, Second, simpleTest, defaultSuccess, defaultFailure, defaultProgress)
 import Test.Serialization.Symbiote.Cereal ()
 import Test.Serialization.Symbiote.Aeson ()
 import Test.Serialization.Symbiote.Abides (AbidesMonoid (..), AbidesCommutativeRing (..), AbidesField (..))
@@ -135,7 +135,7 @@ instance Eq a => SymbioteOperation [a] (Either Bool [a]) where
     TailList -> Right $ if null x then [] else tail x
 deriving instance Show a => Show (Operation [a])
 deriving instance Generic (Operation [a])
-instance Cereal.Serialize (Operation [a])
+instance Cereal.Serialize a => Cereal.Serialize (Operation [a])
 instance Json.ToJSON a => Json.ToJSON (Operation [a])
 instance Json.FromJSON a => Json.FromJSON (Operation [a])
 instance Arbitrary a => Arbitrary (Operation [a]) where
@@ -156,6 +156,8 @@ instance Arbitrary (Operation Json.Value) where
 instance Symbiote Json.Value Json.Value LBS.ByteString where
   encode = Json.encode
   decode = Json.decode
+  encodeOut _ = Json.encode
+  decodeOut _ = Json.decode
   encodeOp _ = "id"
   decodeOp x | x == "id" = Just JsonId
              | otherwise = Nothing

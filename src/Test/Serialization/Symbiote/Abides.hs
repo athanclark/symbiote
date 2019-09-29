@@ -443,6 +443,16 @@ instance FromJSON a => FromJSON (Operation (AbidesDivisionRing a)) where
     | s == "inverse" = pure DivisionRingInverse
     | otherwise = typeMismatch "Operation (AbidesDivisionRing a)" x
   parseJSON x = typeMismatch "Operation (AbidesDivisionRing a)" x
+instance Serialize a => Serialize (Operation (AbidesDivisionRing a)) where
+  put op = case op of
+    DivisionRingRing op' -> putWord8 0 *> put op'
+    DivisionRingInverse -> putWord8 1
+  get = do
+    x <- getWord8
+    case x of
+      0 -> DivisionRingRing <$> get
+      1 -> pure DivisionRingInverse
+      _ -> fail "Operation (AbidesDivisionRing a)"
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesEuclideanRing a) Bool where
   data Operation (AbidesEuclideanRing a)
@@ -468,6 +478,16 @@ instance FromJSON a => FromJSON (Operation (AbidesEuclideanRing a)) where
       commutativeRing = EuclideanRingCommutativeRing <$> o .: "commutativeRing"
       integralDomain = EuclideanRingIntegralDomain <$> o .: "integralDomain"
   parseJSON x = typeMismatch "Operation (AbidesEuclideanRing a)" x
+instance Serialize a => Serialize (Operation (AbidesEuclideanRing a)) where
+  put op = case op of
+    EuclideanRingCommutativeRing op' -> putWord8 0 *> put op'
+    EuclideanRingIntegralDomain y -> putWord8 1 *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> EuclideanRingCommutativeRing <$> get
+      1 -> EuclideanRingIntegralDomain <$> get
+      _ -> fail "Operation (AbidesEuclideanRing a)"
 
 instance (Fractional a, Eq a) => SymbioteOperation (AbidesField a) Bool where
   data Operation (AbidesField a)
@@ -493,3 +513,13 @@ instance FromJSON a => FromJSON (Operation (AbidesField a)) where
       divisionRing = FieldDivisionRing <$> o .: "divisionRing"
       euclideanRing = FieldEuclideanRing <$> o .: "euclideanRing"
   parseJSON x = typeMismatch "Operation (AbidesField a)" x
+instance Serialize a => Serialize (Operation (AbidesField a)) where
+  put op = case op of
+    FieldDivisionRing op' -> putWord8 0 *> put op'
+    FieldEuclideanRing y -> putWord8 1 *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> FieldDivisionRing <$> get
+      1 -> FieldEuclideanRing <$> get
+      _ -> fail "Operation (AbidesField a)"
