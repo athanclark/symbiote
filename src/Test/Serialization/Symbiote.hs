@@ -30,7 +30,7 @@ Your first order of business in making @TypeA@ a symbiote, is to first demonstra
 
 > {-# LANGUAGE MultiparamTypeClasses, TypeFamilies #-}
 >
-> instance SymbioteOperation TypeA where
+> instance SymbioteOperation TypeA TypeA where
 >   data Operation TypeA
 >     = F
 >     | G TypeA
@@ -52,16 +52,18 @@ You're also going to need to make sure your new data-family has appropriate seri
 >         s <- parseJSON json
 >         if s == "f"
 >           then pure F
->           else fail "Not F"
+>           else typeMismatch "Operation TypeA" json
 >       getG = do
->         x <- json .: "g"
->         pure (G x)
+>         o <- parseJSON json
+>         G <$> o .: "g"
 
 Next, let's make @TypeA@ an instance of 'Symbiote':
 
-> instance Symbiote TypeA Value where
+> instance Symbiote TypeA TypeA Value where
 >   encode = Aeson.toJSON
 >   decode = Aeson.parseMaybe Aeson.parseJSON
+>   encodeOut _ = Aeson.toJSON
+>   decodeOut _ = Aeson.parseMaybe Aeson.parseJSON
 >   encodeOp = Aeson.toJSON
 >   decodeOp = Aeson.parseMaybe Aeson.parseJSON
 

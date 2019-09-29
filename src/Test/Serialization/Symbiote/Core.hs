@@ -10,6 +10,16 @@
   , GeneralizedNewtypeDeriving
   #-}
 
+{-|
+
+Module: Test.Serialization.Symbiote.Core
+Copyright: (c) 2019 Athan Clark
+License: BSD-3-Style
+Maintainer: athan.clark@gmail.com
+Portability: GHC
+
+-}
+
 module Test.Serialization.Symbiote.Core where
 
 import Data.Text (Text)
