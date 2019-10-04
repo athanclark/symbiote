@@ -95,6 +95,7 @@ import Test.Serialization.Symbiote.Core
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import Data.Int (Int32)
 import Data.Text (unpack)
 import Data.Proxy (Proxy (..))
 import Data.Aeson (ToJSON (..), FromJSON (..), (.=), object, (.:), Value (Object, String))
@@ -145,7 +146,7 @@ register :: forall a o s m
          => Eq o
          => MonadIO m
          => Topic
-         -> Int -- ^ Max size
+         -> Int32 -- ^ Max size
          -> Proxy a -- ^ Reference to datatype
          -> SymbioteT s m ()
 register t maxSize Proxy = do
@@ -262,7 +263,7 @@ instance Serialize s => Serialize (Operating s) where
 
 -- | Messages sent by the first peer
 data First s
-  = AvailableTopics (Map Topic Int) -- ^ Mapping of topics to their gen size
+  = AvailableTopics (Map Topic Int32) -- ^ Mapping of topics to their gen size
   | FirstGenerating
     { firstGeneratingTopic :: Topic
     , firstGenerating :: Generating s
@@ -320,7 +321,7 @@ getFirstOperating x = case x of
 
 -- | Messages sent by the second peer
 data Second s
-  = BadTopics (Map Topic Int)
+  = BadTopics (Map Topic Int32)
   | Start
   | SecondOperating
     { secondOperatingTopic :: Topic
@@ -386,8 +387,8 @@ getSecondOperating x = case x of
 
 data Failure them s
   = BadTopicsFailure
-    { badTopicsFirst :: Map Topic Int
-    , badTopicsSecond :: Map Topic Int
+    { badTopicsFirst :: Map Topic Int32
+    , badTopicsSecond :: Map Topic Int32
     }
   | OutOfSyncFirst (First s)
   | OutOfSyncSecond (Second s)

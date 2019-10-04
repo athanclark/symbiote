@@ -26,6 +26,7 @@ import Data.Text (Text)
 import Data.String (IsString)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Int (Int32)
 import Data.Proxy (Proxy (..))
 import Data.Aeson (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 import Data.Serialize (Serialize)
@@ -75,7 +76,7 @@ data SymbioteProtocol a s
 
 -- | Protocol generation state
 data SymbioteGeneration a s = SymbioteGeneration
-  { size     :: Int
+  { size     :: Int32
   , protocol :: SymbioteProtocol a s
   }
 
@@ -92,7 +93,7 @@ data SymbioteState a o s =
   { generate   :: Gen a
   , generateOp :: Gen (Operation a)
   , equal      :: o -> o -> Bool
-  , maxSize    :: Int
+  , maxSize    :: Int32
   , generation :: TVar (SymbioteGeneration a s)
   , encode'    :: a -> s
   , encodeOut' :: o -> s
@@ -139,7 +140,7 @@ generateSymbiote (ExistsSymbiote SymbioteState{generate,generateOp,maxSize,gener
     then pure DoneGenerating
     else do
       let genResize :: forall q. Gen q -> m q
-          genResize = liftIO . QC.generate . resize size
+          genResize = liftIO . QC.generate . resize (fromIntegral size)
       generatedValue <- encode <$> genResize generate
       generatedOperation <- encodeOp <$> genResize generateOp
       pure GeneratedSymbiote{generatedValue,generatedOperation}
