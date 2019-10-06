@@ -109,7 +109,7 @@ import Control.Concurrent.STM
 import Control.Concurrent.Async (async, wait)
 import Control.Applicative ((<|>))
 import Control.Monad (void)
-import Control.Monad.Trans.Control (MonadBaseControl, liftBaseWith)
+import Control.Monad.Trans.Control.Aligned (MonadBaseControl, liftBaseWith)
 import Control.Monad.State (modify')
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
@@ -763,7 +763,7 @@ operating
 
 
 -- | Prints to stdout and uses a local channel for a sanity-check - doesn't serialize.
-simpleTest :: MonadBaseControl IO m
+simpleTest :: MonadBaseControl IO m stM
            => MonadIO m
            => Show s
            => SymbioteT s m () -> m ()
@@ -774,7 +774,7 @@ simpleTest =
     (liftIO . defaultFailure)
     nullProgress
 
-simpleTest' :: MonadBaseControl IO m
+simpleTest' :: MonadBaseControl IO m stM
             => MonadIO m
             => Show s
             => (Topic -> m ()) -- ^ report topic success

@@ -11,6 +11,13 @@ packages:
       sha256: 67c9504dab6c55c5e06dd849ebf713883c73bd4e22f91b7a9e0f7309b4e7861a
   original:
     hackage: abides-0.0.1
+- completed:
+    hackage: websockets-simple-0.2.0@sha256:aadc52e93864fedf5e963e2915ea50b9769017141d5f13aef362b94199a65319,1971
+    pantry-tree:
+      size: 406
+      sha256: 4e0abd89312e2a8686866f5caa3d049bf794c5c738462b4532a5fff958fbb0f2
+  original:
+    hackage: websockets-simple-0.2.0
 snapshots:
 - completed:
     size: 523878
