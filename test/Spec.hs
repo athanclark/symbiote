@@ -18,6 +18,7 @@ import Test.Serialization.Symbiote
 import Test.Serialization.Symbiote.Cereal ()
 import Test.Serialization.Symbiote.Aeson ()
 import Test.Serialization.Symbiote.Abides
+import Test.Serialization.Symbiote.WebSocket (firstPeerWebSocketJson, Debug (..))
 import Test.QuickCheck (Arbitrary (..))
 import Test.QuickCheck.Gen (elements, oneof, scale, getSize)
 import Test.QuickCheck.Instances ()
@@ -28,7 +29,16 @@ import qualified Data.Aeson.Types as Json
 import qualified Data.Serialize as Cereal
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Control.Monad.IO.Class (liftIO)
 import GHC.Generics (Generic)
+import Network.WebSockets.Connection (defaultConnectionOptions)
+import Network.WebSockets.Simple (accept)
+import Network.WebSockets.Trans (runServerAppT)
+import Network.Wai (responseLBS)
+import Network.Wai.Handler.WebSockets (websocketsOr)
+import Network.Wai.Handler.Warp (run)
+import Network.Wai.Middleware.RequestLogger (logStdoutDev)
+import Network.HTTP.Types (status400)
 
 
 main :: IO ()
@@ -89,6 +99,22 @@ tests = testGroup "All Tests"
             , go ("Topic", Proxy :: Proxy Topic)
             ]
           ]
+    , testGroup "WebSocket Server" $
+      let runClient client = do
+            let server = accept client
+            server' <- runServerAppT server
+            liftIO $ run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
+              respond $ responseLBS status400 [] "Not a websocket"
+      in  [ testCase "Json" $
+              let tests :: SymbioteT Json.Value IO ()
+                  tests = do
+                    -- register "Generating Bool" 100 (Proxy :: Proxy (Generating Bool))
+                    -- register "Operating Bool" 100 (Proxy :: Proxy (Operating Bool))
+                    -- register "First Bool" 100 (Proxy :: Proxy (First Bool))
+                    -- register "Second Bool" 100 (Proxy :: Proxy (Second Bool))
+                    register "Topic" 100 (Proxy :: Proxy Topic)
+              in  firstPeerWebSocketJson runClient Debug tests
+          ]
     ]
   ]
   where
@@ -110,33 +136,33 @@ tests = testGroup "All Tests"
         listSuite = register "List" 100 (Proxy :: Proxy [Int])
     bytestringTests :: TestTree
     bytestringTests = testGroup "ByteString Tests"
-      [ testCase "Json over id" (simpleTest jsonSuite)
-      , testCase "Int over various" (simpleTest intSuite)
-      , testCase "Double over various" (simpleTest doubleSuite)
-      , testCase "List over various" (simpleTest listSuite)
+      [ testCase "Json over id" (simpleTest jsonSuiteByteString)
+      , testCase "Int over various" (simpleTest intSuiteByteString)
+      , testCase "Double over various" (simpleTest doubleSuiteByteString)
+      , testCase "List over various" (simpleTest listSuiteByteString)
       ]
       where
-        jsonSuite :: SymbioteT LBS.ByteString IO ()
-        jsonSuite = register "Json" 100 (Proxy :: Proxy Json.Value)
-        intSuite :: SymbioteT BS.ByteString IO ()
-        intSuite = register "Int" 100 (Proxy :: Proxy Int)
-        doubleSuite :: SymbioteT BS.ByteString IO ()
-        doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
-        listSuite :: SymbioteT BS.ByteString IO ()
-        listSuite = register "List" 100 (Proxy :: Proxy [Int])
+        jsonSuiteByteString :: SymbioteT LBS.ByteString IO ()
+        jsonSuiteByteString = register "Json" 100 (Proxy :: Proxy Json.Value)
+        intSuiteByteString :: SymbioteT BS.ByteString IO ()
+        intSuiteByteString = register "Int" 100 (Proxy :: Proxy Int)
+        doubleSuiteByteString :: SymbioteT BS.ByteString IO ()
+        doubleSuiteByteString = register "Double" 100 (Proxy :: Proxy Double)
+        listSuiteByteString :: SymbioteT BS.ByteString IO ()
+        listSuiteByteString = register "List" 100 (Proxy :: Proxy [Int])
     jsonTests :: TestTree
     jsonTests = testGroup "Json Tests"
-      [ testCase "Int over various" (simpleTest intSuite)
-      , testCase "Double over various" (simpleTest doubleSuite)
-      , testCase "List over various" (simpleTest listSuite)
+      [ testCase "Int over various" (simpleTest intSuiteJson)
+      , testCase "Double over various" (simpleTest doubleSuiteJson)
+      , testCase "List over various" (simpleTest listSuiteJson)
       ]
       where
-        intSuite :: SymbioteT Json.Value IO ()
-        intSuite = register "Int" 100 (Proxy :: Proxy Int)
-        doubleSuite :: SymbioteT Json.Value IO ()
-        doubleSuite = register "Double" 100 (Proxy :: Proxy Double)
-        listSuite :: SymbioteT Json.Value IO ()
-        listSuite = register "List" 100 (Proxy :: Proxy [Int])
+        intSuiteJson :: SymbioteT Json.Value IO ()
+        intSuiteJson = register "Int" 100 (Proxy :: Proxy Int)
+        doubleSuiteJson :: SymbioteT Json.Value IO ()
+        doubleSuiteJson = register "Double" 100 (Proxy :: Proxy Double)
+        listSuiteJson :: SymbioteT Json.Value IO ()
+        listSuiteJson = register "List" 100 (Proxy :: Proxy [Int])
 
 instance SymbioteOperation () () where
   data Operation () = UnitId
@@ -235,3 +261,66 @@ jsonIso Proxy x = Json.decode (Json.encode x) == Just x
 
 cerealIso :: Cereal.Serialize a => Eq a => Proxy a -> a -> Bool
 cerealIso Proxy x = Cereal.decode (Cereal.encode x) == Right x
+
+
+
+-- Internal instances
+instance SymbioteOperation (Generating s) (Generating s) where
+  data Operation (Generating s) = GeneratingId
+  perform GeneratingId x = x
+instance Arbitrary (Operation (Generating s)) where
+  arbitrary = pure GeneratingId
+instance Json.ToJSON (Operation (Generating s)) where
+  toJSON GeneratingId = Json.String "id"
+instance Json.FromJSON (Operation (Generating s)) where
+  parseJSON (Json.String s)
+    | s == "id" = pure GeneratingId
+  parseJSON json = Json.typeMismatch "Operation (Generating s)" json
+
+instance SymbioteOperation (Operating s) (Operating s) where
+  data Operation (Operating s) = OperatingId
+  perform OperatingId x = x
+instance Arbitrary (Operation (Operating s)) where
+  arbitrary = pure OperatingId
+instance Json.ToJSON (Operation (Operating s)) where
+  toJSON OperatingId = Json.String "id"
+instance Json.FromJSON (Operation (Operating s)) where
+  parseJSON (Json.String s)
+    | s == "id" = pure OperatingId
+  parseJSON json = Json.typeMismatch "Operation (Operating S)" json
+
+instance SymbioteOperation (First s) (First s) where
+  data Operation (First s) = FirstId
+  perform FirstId x = x
+instance Arbitrary (Operation (First s)) where
+  arbitrary = pure FirstId
+instance Json.ToJSON (Operation (First s)) where
+  toJSON FirstId = Json.String "id"
+instance Json.FromJSON (Operation (First s)) where
+  parseJSON (Json.String s)
+    | s == "id" = pure FirstId
+  parseJSON json = Json.typeMismatch "Operation (First S)" json
+
+instance SymbioteOperation (Second s) (Second s) where
+  data Operation (Second s) = SecondId
+  perform SecondId x = x
+instance Arbitrary (Operation (Second s)) where
+  arbitrary = pure SecondId
+instance Json.ToJSON (Operation (Second s)) where
+  toJSON SecondId = Json.String "id"
+instance Json.FromJSON (Operation (Second s)) where
+  parseJSON (Json.String s)
+    | s == "id" = pure SecondId
+  parseJSON json = Json.typeMismatch "Operation (Second S)" json
+
+instance SymbioteOperation Topic Topic where
+  data Operation Topic = TopicId
+  perform TopicId x = x
+instance Arbitrary (Operation Topic) where
+  arbitrary = pure TopicId
+instance Json.ToJSON (Operation Topic) where
+  toJSON TopicId = Json.String "id"
+instance Json.FromJSON (Operation Topic) where
+  parseJSON (Json.String s)
+    | s == "id" = pure TopicId
+  parseJSON json = Json.typeMismatch "Operation Topic" json

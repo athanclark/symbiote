@@ -18,6 +18,13 @@ packages:
       sha256: 4e0abd89312e2a8686866f5caa3d049bf794c5c738462b4532a5fff958fbb0f2
   original:
     hackage: websockets-simple-0.2.0
+- completed:
+    hackage: websockets-simple-extra-0.0.0@sha256:9bfa31547e3f0d92202545050486594b4ab69cc09c728eb756af2d9ed9b58687,1118
+    pantry-tree:
+      size: 344
+      sha256: 21b8baf27a36b696ea180b1aab90b0367170070c0165be8b6ce08fbc07239a2a
+  original:
+    hackage: websockets-simple-extra-0.0.0
 snapshots:
 - completed:
     size: 523878

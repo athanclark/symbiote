@@ -37,6 +37,7 @@ dependencies:
 - QuickCheck
 - quickcheck-instances
 - websockets-simple >= 0.2.0
+- websockets-simple-extra
 - wai-transformers >= 0.1.0
 
 library:
@@ -55,9 +56,17 @@ tests:
     - aeson
     - bytestring
     - cereal
+    - http-types
     - QuickCheck
     - quickcheck-instances
     - stm
     - tasty
     - tasty-hunit
     - tasty-quickcheck
+    - wai
+    - wai-extra
+    - wai-transformers
+    - wai-websockets
+    - warp
+    - websockets
+    - websockets-simple
