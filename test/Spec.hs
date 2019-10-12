@@ -102,6 +102,8 @@ tests = testGroup "All Tests"
     , testGroup "WebSocket Server" $
       let runClient client = do
             let server = accept client
+            -- runServer "localhost" 3000 server'
+            let server = accept client
             server' <- runServerAppT server
             liftIO $ run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
               respond $ responseLBS status400 [] "Not a websocket"

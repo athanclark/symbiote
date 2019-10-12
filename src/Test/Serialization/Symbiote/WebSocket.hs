@@ -198,4 +198,4 @@ peerWebSocket webSocket peer tests = do
         }
   wsThread <- liftIO (async (webSocket app))
   peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
-  liftIO (wait wsThread)
+  liftIO (cancel wsThread)
