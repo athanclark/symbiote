@@ -8,7 +8,7 @@
 module Test.Serialization.Symbiote.WebSocket where
 
 import Test.Serialization.Symbiote
-  (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, Topic, Failure)
+  (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, nullProgress, Topic, Failure)
 
 import Data.Aeson (ToJSON, FromJSON)
 import Data.Serialize (Serialize)
@@ -29,7 +29,7 @@ import Network.WebSockets.Simple.Logger (logStdout)
 import Network.WebSockets.Trans (ClientAppT)
 
 
-data Debug = Debug | NoDebug
+data Debug = FullDebug | Percent | NoDebug
 
 
 secondPeerWebSocketByteString :: MonadIO m
@@ -104,24 +104,27 @@ peerWebSocketByteString :: forall m stM s them me
                           )
                         -> SymbioteT s m ()
                         -> m ()
-peerWebSocketByteString runClientAppT debug = peerWebSocket $ \app ->
-  runClientAppT $ toClientAppTBinary $
-    ( case debug of
-        Debug -> logStdout
-        NoDebug -> id
-    ) $ dimap' receive send app
+peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
   where
-    receive :: ByteString -> IO (them s)
-    receive buf = do
-      let eX = Cereal.decodeLazy buf
-      case eX of
-        Left e -> do
-          putStrLn $ "Can't parse buffer: " ++ show buf
-          error e
-        Right x -> pure x
+    go :: WebSocketsApp IO (them s) (me s) -> IO ()
+    go app =
+      runClientAppT $ toClientAppTBinary $
+        ( case debug of
+            FullDebug -> logStdout
+            _ -> id
+        ) $ dimap' receive send app
+      where
+        receive :: ByteString -> IO (them s)
+        receive buf = do
+          let eX = Cereal.decodeLazy buf
+          case eX of
+            Left e -> do
+              putStrLn $ "Can't parse buffer: " ++ show buf
+              error e
+            Right x -> pure x
 
-    send :: me s -> ByteString
-    send = Cereal.encodeLazy
+        send :: me s -> ByteString
+        send = Cereal.encodeLazy
 
 
 peerWebSocketJson :: MonadIO m
@@ -148,13 +151,13 @@ peerWebSocketJson runClientAppT debug = peerWebSocket
   ( runClientAppT
     . toClientAppTString
     . ( case debug of
-          Debug -> logStdout
-          NoDebug -> id
+          FullDebug -> logStdout
+          _ -> id
       )
     . dimapStringify
     . dimapJson
   )
-
+  debug
 
 peerWebSocket :: forall m stM s them me
                . MonadIO m
@@ -164,6 +167,7 @@ peerWebSocket :: forall m stM s them me
               => ( WebSocketsApp IO (them s) (me s)
                 -> IO ()
                  )
+              -> Debug
               -> ( (me s -> m ())
                 -> m (them s)
                 -> (Topic -> m ())
@@ -174,7 +178,7 @@ peerWebSocket :: forall m stM s them me
                  )
               -> SymbioteT s m ()
               -> m ()
-peerWebSocket webSocket peer tests = do
+peerWebSocket webSocket debug peer tests = do
   (outgoing :: TChan (me s)) <- liftIO newTChanIO
   (incoming :: TChan (them s)) <- liftIO newTChanIO
   (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
@@ -182,7 +186,9 @@ peerWebSocket webSocket peer tests = do
       receiveAndDecode = liftIO $ atomically $ readTChan incoming
       onSuccess t = liftIO $ putStrLn $ "Topic finished: " ++ show t
       onFailure = liftIO . defaultFailure
-      onProgress t n = liftIO (defaultProgress t n)
+      onProgress t n = case debug of
+        NoDebug -> nullProgress t n
+        _ -> liftIO (defaultProgress t n)
 
       onOpen :: WebSocketsAppParams IO (me s) -> IO ()
       onOpen WebSocketsAppParams{close,send} = do

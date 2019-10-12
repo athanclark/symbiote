@@ -110,12 +110,12 @@ tests = testGroup "All Tests"
       in  [ testCase "Json" $
               let tests :: SymbioteT Json.Value IO ()
                   tests = do
-                    -- register "Generating Bool" 100 (Proxy :: Proxy (Generating Bool))
-                    -- register "Operating Bool" 100 (Proxy :: Proxy (Operating Bool))
-                    -- register "First Bool" 100 (Proxy :: Proxy (First Bool))
-                    -- register "Second Bool" 100 (Proxy :: Proxy (Second Bool))
+                    register "Generating Topic" 100 (Proxy :: Proxy (Generating Topic))
+                    register "Operating Topic" 100 (Proxy :: Proxy (Operating Topic))
+                    register "First Topic" 100 (Proxy :: Proxy (First Topic))
+                    register "Second Topic" 100 (Proxy :: Proxy (Second Topic))
                     register "Topic" 100 (Proxy :: Proxy Topic)
-              in  firstPeerWebSocketJson runClient Debug tests
+              in  firstPeerWebSocketJson runClient NoDebug tests
           ]
     ]
   ]
