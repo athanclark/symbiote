@@ -22,15 +22,18 @@ Portability: GHC
 
 module Test.Serialization.Symbiote.Core where
 
-import Data.Text (Text)
+import Data.Text (Text, unpack, pack, length)
 import Data.String (IsString)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Int (Int32)
 import Data.Proxy (Proxy (..))
+import Data.Traversable (traverse)
 import Data.Aeson (ToJSON, FromJSON, ToJSONKey, FromJSONKey)
-import Data.Serialize (Serialize)
-import Data.Serialize.Text ()
+import Data.Serialize (Serialize (..))
+import Data.Serialize.Put (putInt32be)
+import Data.Serialize.Get (getInt32be)
+import Control.Monad (void, replicateM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Concurrent.STM
   (TVar, readTVar, readTVarIO, modifyTVar', atomically)
@@ -59,7 +62,14 @@ class SymbioteOperation a o => Symbiote a o s | a -> o where
 
 -- | Unique name of a type, for a suite of tests
 newtype Topic = Topic Text
-  deriving (Eq, Ord, Show, IsString, Arbitrary, ToJSON, FromJSON, ToJSONKey, FromJSONKey, Serialize)
+  deriving (Eq, Ord, Show, IsString, Arbitrary, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
+instance Serialize Topic where
+  put (Topic t) = do
+    putInt32be (fromIntegral (Data.Text.length t))
+    void (traverse put (unpack t))
+  get = do
+    l <- getInt32be
+    Topic . pack <$> replicateM (fromIntegral l) get
 
 -- | Protocol state for a particular topic
 data SymbioteProtocol a s

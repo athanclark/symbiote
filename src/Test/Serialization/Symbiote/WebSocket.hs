@@ -90,6 +90,7 @@ peerWebSocketByteString :: forall m stM s them me
                         => Extractable stM
                         => Show s
                         => Show (them s)
+                        => Show (me s) -- extra
                         => Serialize (me s)
                         => Serialize (them s)
                         => (ClientAppT IO () -> IO ())
@@ -112,7 +113,7 @@ peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
         ( case debug of
             FullDebug -> logStdout
             _ -> id
-        ) $ dimap' receive send app
+        ) $ dimap' receive send $ logStdout app
       where
         receive :: ByteString -> IO (them s)
         receive buf = do

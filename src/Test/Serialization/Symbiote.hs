@@ -101,14 +101,14 @@ import Data.Proxy (Proxy (..))
 import Data.Aeson (ToJSON (..), FromJSON (..), (.=), object, (.:), Value (Object, String))
 import Data.Aeson.Types (typeMismatch)
 import Data.Serialize (Serialize (..))
-import Data.Serialize.Put (putWord8)
-import Data.Serialize.Get (getWord8)
+import Data.Serialize.Put (putWord8, putInt32be)
+import Data.Serialize.Get (getWord8, getInt32be)
 import Text.Printf (printf)
 import Control.Concurrent.STM
   (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
 import Control.Concurrent.Async (async, wait)
 import Control.Applicative ((<|>))
-import Control.Monad (void)
+import Control.Monad (void, replicateM)
 import Control.Monad.Trans.Control.Aligned (MonadBaseControl, liftBaseWith)
 import Control.Monad.State (modify')
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -297,13 +297,19 @@ instance FromJSON s => FromJSON (First s) where
   parseJSON x = typeMismatch "First s" x
 instance Serialize s => Serialize (First s) where
   put x = case x of
-    AvailableTopics ts -> putWord8 0 *> put ts
+    AvailableTopics ts -> do
+      putWord8 0
+      let ls = Map.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
     FirstGenerating t y -> putWord8 1 *> put t *> put y
     FirstOperating t y -> putWord8 2 *> put t *> put y
   get = do
     x <- getWord8
     case x of
-      0 -> AvailableTopics <$> get
+      0 -> do
+        l <- getInt32be
+        AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
       1 -> FirstGenerating <$> get <*> get
       2 -> FirstOperating <$> get <*> get
       _ -> fail "First s"
@@ -361,14 +367,20 @@ instance FromJSON s => FromJSON (Second s) where
   parseJSON x = typeMismatch "Second s" x
 instance Serialize s => Serialize (Second s) where
   put x = case x of
-    BadTopics ts -> putWord8 0 *> put ts
+    BadTopics ts -> do
+      putWord8 0
+      let ls = Map.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
     Start -> putWord8 1
     SecondOperating t y -> putWord8 2 *> put t *> put y
     SecondGenerating t y -> putWord8 3 *> put t *> put y
   get = do
     x <- getWord8
     case x of
-      0 -> BadTopics <$> get
+      0 -> do
+        l <- getInt32be
+        BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
       1 -> pure Start
       2 -> SecondOperating <$> get <*> get
       3 -> SecondGenerating <$> get <*> get
