@@ -5,6 +5,19 @@
   , ScopedTypeVariables
   #-}
 
+{-|
+
+Module: Test.Serialization.Symbiote.WebSocket
+Copyright: (c) 2019 Athan Clark
+License: BSD-3-Style
+Maintainer: athan.clark@gmail.com
+Portability: GHC
+
+Use these functions to communicate over a WebSocket as your peer-to-peer communication mechanism.
+
+-}
+
+
 module Test.Serialization.Symbiote.WebSocket where
 
 import Test.Serialization.Symbiote
@@ -33,13 +46,33 @@ import Network.WebSockets.Trans (ClientAppT)
 data Debug = FullDebug | Percent | NoDebug
 
 
+secondPeerWebSocketLazyByteString :: MonadIO m
+                                  => MonadBaseControl IO m stM
+                                  => MonadCatch m
+                                  => Extractable stM
+                                  => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                                  -> Debug
+                                  -> SymbioteT LBS.ByteString m () -- ^ Tests registered
+                                  -> m ()
+secondPeerWebSocketLazyByteString host debug = peerWebSocketLazyByteString host debug secondPeer
+
+firstPeerWebSocketLazyByteString :: MonadIO m
+                                 => MonadBaseControl IO m stM
+                                 => MonadCatch m
+                                 => Extractable stM
+                                 => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                                 -> Debug
+                                 -> SymbioteT LBS.ByteString m () -- ^ Tests registered
+                                 -> m ()
+firstPeerWebSocketLazyByteString host debug = peerWebSocketLazyByteString host debug firstPeer
+
 secondPeerWebSocketByteString :: MonadIO m
                               => MonadBaseControl IO m stM
                               => MonadCatch m
                               => Extractable stM
-                              => (ClientAppT IO () -> IO ())
+                              => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                               -> Debug
-                              -> SymbioteT BS.ByteString m ()
+                              -> SymbioteT BS.ByteString m () -- ^ Tests registered
                               -> m ()
 secondPeerWebSocketByteString host debug = peerWebSocketByteString host debug secondPeer
 
@@ -47,9 +80,9 @@ firstPeerWebSocketByteString :: MonadIO m
                              => MonadBaseControl IO m stM
                              => MonadCatch m
                              => Extractable stM
-                             => (ClientAppT IO () -> IO ())
+                             => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                              -> Debug
-                             -> SymbioteT BS.ByteString m ()
+                             -> SymbioteT BS.ByteString m () -- ^ Tests registered
                              -> m ()
 firstPeerWebSocketByteString host debug = peerWebSocketByteString host debug firstPeer
 
@@ -57,9 +90,9 @@ secondPeerWebSocketJson :: MonadIO m
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        => (ClientAppT IO () -> IO ())
+                        => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                         -> Debug
-                        -> SymbioteT Value m ()
+                        -> SymbioteT Value m () -- ^ Tests registered
                         -> m ()
 secondPeerWebSocketJson host debug = peerWebSocketJson host debug secondPeer
 
@@ -67,13 +100,51 @@ firstPeerWebSocketJson :: MonadIO m
                        => MonadBaseControl IO m stM
                        => MonadCatch m
                        => Extractable stM
-                       => (ClientAppT IO () -> IO ())
+                       => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                        -> Debug
-                       -> SymbioteT Value m ()
+                       -> SymbioteT Value m () -- ^ Tests registered
                        -> m ()
 firstPeerWebSocketJson host debug = peerWebSocketJson host debug firstPeer
 
--- TODO Lazy
+peerWebSocketLazyByteString :: forall m stM them me
+                             . MonadIO m
+                            => MonadBaseControl IO m stM
+                            => MonadCatch m
+                            => Extractable stM
+                            => Show (them LBS.ByteString)
+                            => Serialize (me LBS.ByteString)
+                            => Serialize (them LBS.ByteString)
+                            => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                            -> Debug
+                            -> ( (me LBS.ByteString -> m ())
+                              -> m (them LBS.ByteString)
+                              -> (Topic -> m ())
+                              -> (Failure them LBS.ByteString -> m ())
+                              -> (Topic -> Float -> m ())
+                              -> SymbioteT LBS.ByteString m ()
+                              -> m ()
+                              )
+                            -> SymbioteT LBS.ByteString m () -- ^ Tests registered
+                            -> m ()
+peerWebSocketLazyByteString runClientAppT debug = peerWebSocket go debug
+  where
+    go :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString) -> IO ()
+    go app =
+      runClientAppT $ toClientAppTBinary $
+        ( case debug of
+            FullDebug -> logStdout
+            _ -> id
+        ) $ dimap' receive Cereal.encodeLazy app
+      where
+        receive :: LBS.ByteString -> IO (them LBS.ByteString)
+        receive buf = do
+          let eX = Cereal.decodeLazy buf
+          case eX of
+            Left e -> do
+              putStrLn $ "Can't parse buffer: " ++ show buf
+              error e
+            Right x -> pure x
+
 peerWebSocketByteString :: forall m stM them me
                          . MonadIO m
                         => MonadBaseControl IO m stM
@@ -82,7 +153,7 @@ peerWebSocketByteString :: forall m stM them me
                         => Show (them BS.ByteString)
                         => Serialize (me BS.ByteString)
                         => Serialize (them BS.ByteString)
-                        => (ClientAppT IO () -> IO ())
+                        => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                         -> Debug
                         -> ( (me BS.ByteString -> m ())
                           -> m (them BS.ByteString)
@@ -92,7 +163,7 @@ peerWebSocketByteString :: forall m stM them me
                           -> SymbioteT BS.ByteString m ()
                           -> m ()
                           )
-                        -> SymbioteT BS.ByteString m ()
+                        -> SymbioteT BS.ByteString m () -- ^ Tests registered
                         -> m ()
 peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
   where
@@ -127,7 +198,7 @@ peerWebSocketJson :: MonadIO m
                   => Show (them Value)
                   => ToJSON (me Value)
                   => FromJSON (them Value)
-                  => (ClientAppT IO () -> IO ())
+                  => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
                   -> Debug
                   -> ( (me Value -> m ())
                     -> m (them Value)
@@ -137,7 +208,7 @@ peerWebSocketJson :: MonadIO m
                     -> SymbioteT Value m ()
                     -> m ()
                     )
-                  -> SymbioteT Value m ()
+                  -> SymbioteT Value m () -- ^ Tests registered
                   -> m ()
 peerWebSocketJson runClientAppT debug = peerWebSocket
   ( runClientAppT
@@ -158,7 +229,7 @@ peerWebSocket :: forall m stM s them me
               => Show s
               => ( WebSocketsApp IO (them s) (me s)
                 -> IO ()
-                 )
+                 ) -- ^ Run the generated WebSocketsApp
               -> Debug
               -> ( (me s -> m ())
                 -> m (them s)
@@ -168,7 +239,7 @@ peerWebSocket :: forall m stM s them me
                 -> SymbioteT s m ()
                 -> m ()
                  )
-              -> SymbioteT s m ()
+              -> SymbioteT s m () -- ^ Tests registered
               -> m ()
 peerWebSocket webSocket debug peer tests = do
   (outgoing :: TChan (me s)) <- liftIO newTChanIO

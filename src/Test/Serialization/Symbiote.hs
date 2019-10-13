@@ -514,7 +514,8 @@ nullProgress :: Applicative m => Topic -> Float -> m ()
 nullProgress _ _ = pure ()
 
 
--- | Run the test suite as the first peer
+-- | Run the test suite as the first peer - see 'Test.Serialization.Symbiote.WebSocket' for end-user
+-- implementations.
 firstPeer :: forall m s
            . MonadIO m
           => Show s
@@ -562,7 +563,8 @@ firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
     _ -> onFailure $ OutOfSyncSecond shouldBeStart
 
 
--- | Run the test suite as the second peer
+-- | Run the test suite as the second peer - see 'Test.Serialization.Symbiote.WebSocket' for end-user
+-- implementations.
 secondPeer :: forall s m
             . MonadIO m
            => Show s
