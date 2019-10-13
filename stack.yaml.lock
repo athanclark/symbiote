@@ -25,6 +25,13 @@ packages:
       sha256: 21b8baf27a36b696ea180b1aab90b0367170070c0165be8b6ce08fbc07239a2a
   original:
     hackage: websockets-simple-extra-0.0.0
+- completed:
+    hackage: zeromq4-simple-0.0.0.2@sha256:95f6419e19ec0f6898ab72e5569894b63439a8c41597fcf752d1ed3c7ad7ee40,1235
+    pantry-tree:
+      size: 323
+      sha256: 3d7cc5448c30f5f10b8b2bd07b17d49a64670153b9547fe6070d8dc7b9664c5d
+  original:
+    hackage: zeromq4-simple-0.0.0.2
 snapshots:
 - completed:
     size: 523878

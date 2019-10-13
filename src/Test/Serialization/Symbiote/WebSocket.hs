@@ -22,6 +22,7 @@ module Test.Serialization.Symbiote.WebSocket where
 
 import Test.Serialization.Symbiote
   (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, nullProgress, Topic, Failure)
+import Test.Serialization.Symbiote.Debug (Debug (..))
 
 import Data.Aeson (ToJSON, FromJSON, Value)
 import Data.Serialize (Serialize)
@@ -41,9 +42,6 @@ import Network.WebSockets.Simple
   (WebSocketsApp (..), WebSocketsAppParams (..), toClientAppTString, toClientAppTBinary, dimap', dimapJson, dimapStringify)
 import Network.WebSockets.Simple.Logger (logStdout)
 import Network.WebSockets.Trans (ClientAppT)
-
-
-data Debug = FullDebug | Percent | NoDebug
 
 
 secondPeerWebSocketLazyByteString :: MonadIO m

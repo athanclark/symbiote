@@ -38,6 +38,8 @@ dependencies:
 - websockets-simple >= 0.2.0
 - websockets-simple-extra
 - wai-transformers >= 0.1.0
+- zeromq4-haskell
+- zeromq4-simple >= 0.0.0.2
 
 library:
   source-dirs: src

@@ -20,8 +20,7 @@ main = defaultMain tests
 
 
 tests :: TestTree
-tests = testGroup "All Tests"
+tests = testGroup "All Tests" $
   [ sanityTests
   , localIsos
-  , protocolTests
-  ]
+  ] ++ protocolTests
