@@ -95,14 +95,16 @@ import Test.Serialization.Symbiote.Core
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.Int (Int32)
 import Data.Text (unpack)
 import Data.Proxy (Proxy (..))
 import Data.Aeson (ToJSON (..), FromJSON (..), (.=), object, (.:), Value (Object, String))
 import Data.Aeson.Types (typeMismatch)
 import Data.Serialize (Serialize (..))
-import Data.Serialize.Put (putWord8, putInt32be)
-import Data.Serialize.Get (getWord8, getInt32be)
+import Data.Serialize.Put (putWord8, putInt32be, putByteString, putLazyByteString)
+import Data.Serialize.Get (getWord8, getInt32be, getByteString, getLazyByteString)
 import Text.Printf (printf)
 import Control.Concurrent.STM
   (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
@@ -207,22 +209,40 @@ instance FromJSON s => FromJSON (Generating s) where
     | s == "yourTurn" = pure YourTurn
     | otherwise = typeMismatch "Generating s" x
   parseJSON x = typeMismatch "Generating s" x
-instance Serialize s => Serialize (Generating s) where
+-- | For supporting 32bit limitation on length prefix
+instance Serialize (Generating BS.ByteString) where
   put x = case x of
-    Generated{..} -> putWord8 0 *> put genValue *> put genOperation
-    BadResult r -> putWord8 1 *> put r
+    Generated{..} -> putWord8 0 *> putByteString' genValue *> putByteString' genOperation
+    BadResult r -> putWord8 1 *> putByteString' r
     YourTurn -> putWord8 2
     ImFinished -> putWord8 3
-    GeneratingNoParseOperated r -> putWord8 4 *> put r
+    GeneratingNoParseOperated r -> putWord8 4 *> putByteString' r
   get = do
     x <- getWord8
     case x of
-      0 -> Generated <$> get <*> get
-      1 -> BadResult <$> get
+      0 -> Generated <$> getByteString' <*> getByteString'
+      1 -> BadResult <$> getByteString'
       2 -> pure YourTurn
       3 -> pure ImFinished
-      4 -> GeneratingNoParseOperated <$> get
-      _ -> fail "Generating s"
+      4 -> GeneratingNoParseOperated <$> getByteString'
+      _ -> fail "Generating ByteString"
+-- | For supporting 32bit limitation on length prefix
+instance Serialize (Generating LBS.ByteString) where
+  put x = case x of
+    Generated{..} -> putWord8 0 *> putLazyByteString' genValue *> putLazyByteString' genOperation
+    BadResult r -> putWord8 1 *> putLazyByteString' r
+    YourTurn -> putWord8 2
+    ImFinished -> putWord8 3
+    GeneratingNoParseOperated r -> putWord8 4 *> putLazyByteString' r
+  get = do
+    x <- getWord8
+    case x of
+      0 -> Generated <$> getLazyByteString' <*> getLazyByteString'
+      1 -> BadResult <$> getLazyByteString'
+      2 -> pure YourTurn
+      3 -> pure ImFinished
+      4 -> GeneratingNoParseOperated <$> getLazyByteString'
+      _ -> fail "Generating LazyByteString"
 
 -- | Messages sent by a peer during their operating phase
 data Operating s
@@ -248,18 +268,32 @@ instance FromJSON s => FromJSON (Operating s) where
       noParseValue = OperatingNoParseValue <$> o .: "noParseValue"
       noParseOperation = OperatingNoParseOperation <$> o .: "noParseOperation"
   parseJSON x = typeMismatch "Operating s" x
-instance Serialize s => Serialize (Operating s) where
+-- | For supporting 32bit limitation on length prefix
+instance Serialize (Operating BS.ByteString) where
   put x = case x of
-    Operated y -> putWord8 0 *> put y
-    OperatingNoParseValue r -> putWord8 1 *> put r
-    OperatingNoParseOperation r -> putWord8 2 *> put r
+    Operated y -> putWord8 0 *> putByteString' y
+    OperatingNoParseValue r -> putWord8 1 *> putByteString' r
+    OperatingNoParseOperation r -> putWord8 2 *> putByteString' r
   get = do
     x <- getWord8
     case x of
-      0 -> Operated <$> get
-      1 -> OperatingNoParseValue <$> get
-      2 -> OperatingNoParseOperation <$> get
-      _ -> fail "Operating s"
+      0 -> Operated <$> getByteString'
+      1 -> OperatingNoParseValue <$> getByteString'
+      2 -> OperatingNoParseOperation <$> getByteString'
+      _ -> fail "Operating ByteString"
+-- | For supporting 32bit limitation on length prefix
+instance Serialize (Operating LBS.ByteString) where
+  put x = case x of
+    Operated y -> putWord8 0 *> putLazyByteString' y
+    OperatingNoParseValue r -> putWord8 1 *> putLazyByteString' r
+    OperatingNoParseOperation r -> putWord8 2 *> putLazyByteString' r
+  get = do
+    x <- getWord8
+    case x of
+      0 -> Operated <$> getLazyByteString'
+      1 -> OperatingNoParseValue <$> getLazyByteString'
+      2 -> OperatingNoParseOperation <$> getLazyByteString'
+      _ -> fail "Operating LazyByteString"
 
 -- | Messages sent by the first peer
 data First s
@@ -295,7 +329,25 @@ instance FromJSON s => FromJSON (First s) where
         o' <- o .: "firstOperating"
         FirstOperating <$> o' .: "topic" <*> o' .: "operating"
   parseJSON x = typeMismatch "First s" x
-instance Serialize s => Serialize (First s) where
+instance Serialize (First BS.ByteString) where
+  put x = case x of
+    AvailableTopics ts -> do
+      putWord8 0
+      let ls = Map.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
+    FirstGenerating t y -> putWord8 1 *> put t *> put y
+    FirstOperating t y -> putWord8 2 *> put t *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> do
+        l <- getInt32be
+        AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      1 -> FirstGenerating <$> get <*> get
+      2 -> FirstOperating <$> get <*> get
+      _ -> fail "First s"
+instance Serialize (First LBS.ByteString) where
   put x = case x of
     AvailableTopics ts -> do
       putWord8 0
@@ -365,7 +417,27 @@ instance FromJSON s => FromJSON (Second s) where
     | s == "start" = pure Start
     | otherwise = typeMismatch "Second s" x
   parseJSON x = typeMismatch "Second s" x
-instance Serialize s => Serialize (Second s) where
+instance Serialize (Second BS.ByteString) where
+  put x = case x of
+    BadTopics ts -> do
+      putWord8 0
+      let ls = Map.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
+    Start -> putWord8 1
+    SecondOperating t y -> putWord8 2 *> put t *> put y
+    SecondGenerating t y -> putWord8 3 *> put t *> put y
+  get = do
+    x <- getWord8
+    case x of
+      0 -> do
+        l <- getInt32be
+        BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      1 -> pure Start
+      2 -> SecondOperating <$> get <*> get
+      3 -> SecondGenerating <$> get <*> get
+      _ -> fail "Second s"
+instance Serialize (Second LBS.ByteString) where
   put x = case x of
     BadTopics ts -> do
       putWord8 0
@@ -813,3 +885,20 @@ simpleTest' onSuccess onFailureSecond onFailureFirst onProgress suite = do
   where
     encodeAndSendChan chan x = liftIO $ atomically (writeTChan chan x)
     receiveAndDecodeChan chan = liftIO $ atomically (readTChan chan)
+
+
+putByteString' b = do
+  putInt32be (fromIntegral (BS.length b))
+  putByteString b
+
+getByteString' = do
+  l <- getInt32be
+  getByteString (fromIntegral l)
+
+putLazyByteString' b = do
+  putInt32be (fromIntegral (LBS.length b))
+  putLazyByteString b
+
+getLazyByteString' = do
+  l <- getInt32be
+  getLazyByteString (fromIntegral l)

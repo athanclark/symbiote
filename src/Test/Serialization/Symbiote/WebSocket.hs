@@ -10,9 +10,10 @@ module Test.Serialization.Symbiote.WebSocket where
 import Test.Serialization.Symbiote
   (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, nullProgress, Topic, Failure)
 
-import Data.Aeson (ToJSON, FromJSON)
+import Data.Aeson (ToJSON, FromJSON, Value)
 import Data.Serialize (Serialize)
-import Data.ByteString.Lazy (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Serialize as Cereal
 import Data.Singleton.Class (Extractable)
 import Control.Monad (forever, void)
@@ -36,11 +37,11 @@ secondPeerWebSocketByteString :: MonadIO m
                               => MonadBaseControl IO m stM
                               => MonadCatch m
                               => Extractable stM
-                              => Show s
-                              => Serialize s
+                              -- => Show s
+                              -- => Serialize s
                               => (ClientAppT IO () -> IO ())
                               -> Debug
-                              -> SymbioteT s m ()
+                              -> SymbioteT BS.ByteString m ()
                               -> m ()
 secondPeerWebSocketByteString host debug = peerWebSocketByteString host debug secondPeer
 
@@ -48,11 +49,11 @@ firstPeerWebSocketByteString :: MonadIO m
                              => MonadBaseControl IO m stM
                              => MonadCatch m
                              => Extractable stM
-                             => Show s
-                             => Serialize s
+                             -- => Show s
+                             -- => Serialize s
                              => (ClientAppT IO () -> IO ())
                              -> Debug
-                             -> SymbioteT s m ()
+                             -> SymbioteT BS.ByteString m ()
                              -> m ()
 firstPeerWebSocketByteString host debug = peerWebSocketByteString host debug firstPeer
 
@@ -60,12 +61,12 @@ secondPeerWebSocketJson :: MonadIO m
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        => Show s
-                        => ToJSON s
-                        => FromJSON s
+                        -- => Show s
+                        -- => ToJSON s
+                        -- => FromJSON s
                         => (ClientAppT IO () -> IO ())
                         -> Debug
-                        -> SymbioteT s m ()
+                        -> SymbioteT Value m ()
                         -> m ()
 secondPeerWebSocketJson host debug = peerWebSocketJson host debug secondPeer
 
@@ -73,80 +74,82 @@ firstPeerWebSocketJson :: MonadIO m
                        => MonadBaseControl IO m stM
                        => MonadCatch m
                        => Extractable stM
-                       => Show s
-                       => ToJSON s
-                       => FromJSON s
+                       -- => Show s
+                       -- => ToJSON s
+                       -- => FromJSON s
                        => (ClientAppT IO () -> IO ())
                        -> Debug
-                       -> SymbioteT s m ()
+                       -> SymbioteT Value m ()
                        -> m ()
 firstPeerWebSocketJson host debug = peerWebSocketJson host debug firstPeer
 
-
-peerWebSocketByteString :: forall m stM s them me
+-- TODO Lazy
+peerWebSocketByteString :: forall m stM them me
                          . MonadIO m
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        => Show s
-                        => Show (them s)
-                        => Show (me s) -- extra
-                        => Serialize (me s)
-                        => Serialize (them s)
+                        -- => Show s
+                        => Show (them BS.ByteString)
+                        => Show (me BS.ByteString) -- extra
+                        => Serialize (me BS.ByteString)
+                        => Serialize (them BS.ByteString)
                         => (ClientAppT IO () -> IO ())
                         -> Debug
-                        -> ( (me s -> m ())
-                          -> m (them s)
+                        -> ( (me BS.ByteString -> m ())
+                          -> m (them BS.ByteString)
                           -> (Topic -> m ())
-                          -> (Failure them s -> m ())
+                          -> (Failure them BS.ByteString -> m ())
                           -> (Topic -> Float -> m ())
-                          -> SymbioteT s m ()
+                          -> SymbioteT BS.ByteString m ()
                           -> m ()
                           )
-                        -> SymbioteT s m ()
+                        -> SymbioteT BS.ByteString m ()
                         -> m ()
 peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
   where
-    go :: WebSocketsApp IO (them s) (me s) -> IO ()
+    go :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString) -> IO ()
     go app =
-      runClientAppT $ toClientAppTBinary $
+      runClientAppT $ toClientAppTBinary $ toLazy $
         ( case debug of
             FullDebug -> logStdout
             _ -> id
-        ) $ dimap' receive send $ logStdout app
+        ) $ dimap' receive Cereal.encode $ logStdout app
       where
-        receive :: ByteString -> IO (them s)
+        receive :: BS.ByteString -> IO (them BS.ByteString)
         receive buf = do
-          let eX = Cereal.decodeLazy buf
+          let eX = Cereal.decode buf
           case eX of
             Left e -> do
               putStrLn $ "Can't parse buffer: " ++ show buf
               error e
             Right x -> pure x
 
-        send :: me s -> ByteString
-        send = Cereal.encodeLazy
+        toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString -> WebSocketsApp IO LBS.ByteString LBS.ByteString
+        toLazy = dimap' r s
+          where
+            r = pure . LBS.toStrict
+            s = LBS.fromStrict
 
 
 peerWebSocketJson :: MonadIO m
                   => MonadBaseControl IO m stM
                   => Extractable stM
                   => MonadCatch m
-                  => Show s
-                  => Show (them s)
-                  => ToJSON (me s)
-                  => FromJSON (them s)
+                  => Show (them Value)
+                  => ToJSON (me Value)
+                  => FromJSON (them Value)
                   => (ClientAppT IO () -> IO ())
                   -> Debug
-                  -> ( (me s -> m ())
-                    -> m (them s)
+                  -> ( (me Value -> m ())
+                    -> m (them Value)
                     -> (Topic -> m ())
-                    -> (Failure them s -> m ())
+                    -> (Failure them Value -> m ())
                     -> (Topic -> Float -> m ())
-                    -> SymbioteT s m ()
+                    -> SymbioteT Value m ()
                     -> m ()
                     )
-                  -> SymbioteT s m ()
+                  -> SymbioteT Value m ()
                   -> m ()
 peerWebSocketJson runClientAppT debug = peerWebSocket
   ( runClientAppT

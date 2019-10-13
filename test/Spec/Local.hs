@@ -4,9 +4,11 @@ import Spec.Types ()
 
 import qualified Data.Aeson as Json
 import qualified Data.Serialize as Cereal
+import Data.ByteString (ByteString)
 import Data.Proxy (Proxy (..))
 import Test.Tasty (testGroup, TestTree)
 import Test.Tasty.QuickCheck (testProperty)
+import Test.QuickCheck.Instances ()
 import Test.Serialization.Symbiote (First, Second, Generating, Operating, Topic)
 import Test.Serialization.Symbiote.Abides
 
@@ -53,10 +55,10 @@ localIsos =
             , go ("AbidesField Int", Proxy :: Proxy (AbidesField Int))
             ]
           , testGroup "Symbiote"
-            [ go ("Generating Int", Proxy :: Proxy (Generating Int))
-            , go ("Operating Int", Proxy :: Proxy (Operating Int))
-            , go ("First Int", Proxy :: Proxy (First Int))
-            , go ("Second Int", Proxy :: Proxy (Second Int))
+            [ go ("Generating ByteString", Proxy :: Proxy (Generating ByteString))
+            , go ("Operating ByteString", Proxy :: Proxy (Operating ByteString))
+            , go ("First ByteString", Proxy :: Proxy (First ByteString))
+            , go ("Second ByteString", Proxy :: Proxy (Second ByteString))
             , go ("Topic", Proxy :: Proxy Topic)
             ]
           ]
