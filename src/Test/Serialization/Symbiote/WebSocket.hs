@@ -37,8 +37,6 @@ secondPeerWebSocketByteString :: MonadIO m
                               => MonadBaseControl IO m stM
                               => MonadCatch m
                               => Extractable stM
-                              -- => Show s
-                              -- => Serialize s
                               => (ClientAppT IO () -> IO ())
                               -> Debug
                               -> SymbioteT BS.ByteString m ()
@@ -49,8 +47,6 @@ firstPeerWebSocketByteString :: MonadIO m
                              => MonadBaseControl IO m stM
                              => MonadCatch m
                              => Extractable stM
-                             -- => Show s
-                             -- => Serialize s
                              => (ClientAppT IO () -> IO ())
                              -> Debug
                              -> SymbioteT BS.ByteString m ()
@@ -61,9 +57,6 @@ secondPeerWebSocketJson :: MonadIO m
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        -- => Show s
-                        -- => ToJSON s
-                        -- => FromJSON s
                         => (ClientAppT IO () -> IO ())
                         -> Debug
                         -> SymbioteT Value m ()
@@ -74,9 +67,6 @@ firstPeerWebSocketJson :: MonadIO m
                        => MonadBaseControl IO m stM
                        => MonadCatch m
                        => Extractable stM
-                       -- => Show s
-                       -- => ToJSON s
-                       -- => FromJSON s
                        => (ClientAppT IO () -> IO ())
                        -> Debug
                        -> SymbioteT Value m ()
@@ -89,9 +79,7 @@ peerWebSocketByteString :: forall m stM them me
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        -- => Show s
                         => Show (them BS.ByteString)
-                        => Show (me BS.ByteString) -- extra
                         => Serialize (me BS.ByteString)
                         => Serialize (them BS.ByteString)
                         => (ClientAppT IO () -> IO ())
@@ -114,7 +102,7 @@ peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
         ( case debug of
             FullDebug -> logStdout
             _ -> id
-        ) $ dimap' receive Cereal.encode $ logStdout app
+        ) $ dimap' receive Cereal.encode app
       where
         receive :: BS.ByteString -> IO (them BS.ByteString)
         receive buf = do

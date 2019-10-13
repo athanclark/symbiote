@@ -55,10 +55,10 @@ protocolTests =
     , testCase "ByteString" $
         let tests :: SymbioteT BS.ByteString IO ()
             tests = do
-              -- register "Generating Topic" 100 (Proxy :: Proxy (Generating Topic))
-              -- register "Operating Topic" 100 (Proxy :: Proxy (Operating Topic))
-              -- register "First Topic" 100 (Proxy :: Proxy (First Topic))
-              -- register "Second Topic" 100 (Proxy :: Proxy (Second Topic))
+              register "Generating ByteString" 10 (Proxy :: Proxy (Generating BS.ByteString))
+              register "Operating ByteString" 10 (Proxy :: Proxy (Operating BS.ByteString))
+              register "First ByteString" 10 (Proxy :: Proxy (First BS.ByteString))
+              register "Second ByteString" 10 (Proxy :: Proxy (Second BS.ByteString))
               register "Topic" 10 (Proxy :: Proxy Topic)
             runClient client = do
               -- runServer "localhost" 3000 server'
@@ -66,7 +66,7 @@ protocolTests =
               server' <- runServerAppT server
               liftIO $ run 3001 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
                 respond $ responseLBS status400 [] "Not a websocket"
-        in  firstPeerWebSocketByteString runClient FullDebug tests
+        in  firstPeerWebSocketByteString runClient NoDebug tests
     ]
 
 -- Internal instances
