@@ -83,9 +83,14 @@ and "how to receive" messages, and likewise how to report status.
 -}
 
 module Test.Serialization.Symbiote
-  ( SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, SymbioteT, register
-  , firstPeer, secondPeer, First (..), Second (..), Generating (..), Operating (..), Failure (..)
-  , defaultSuccess, defaultFailure, defaultProgress, nullProgress, simpleTest, simpleTest'
+  ( -- * Suite Building
+    SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, SymbioteT, register
+  , -- * Protocol Messages
+    First (..), Second (..), Generating (..), Operating (..)
+  , -- * Result Handling
+    Failure (..), defaultSuccess, defaultFailure, defaultProgress, nullProgress
+  , -- * Test Execution
+    simpleTest, simpleTest', firstPeer, secondPeer
   ) where
 
 import Test.Serialization.Symbiote.Core
@@ -120,10 +125,14 @@ import GHC.Generics (Generic)
 
 
 -- | The most trivial serialization medium for any @a@ and @o@.
+-- There's no need to implement transmission protocol specific instances for this type, like 'ToJSON' or 'Serialize', because it is intended to operate locally (on the same program), and over 'Eq'.
 data SimpleSerialization a o
-  = SimpleValue a
-  | SimpleOutput o
-  | SimpleOperation (Operation a)
+  = -- | A value @a@ encodes as just that value
+    SimpleValue a
+  | -- | An output @o@ encodes as just that output
+    SimpleOutput o
+  | -- | An operation 'Operation' encodes as just that operation
+    SimpleOperation (Operation a)
   deriving (Generic)
 deriving instance (Show a, Show o, Show (Operation a)) => Show (SimpleSerialization a o)
 deriving instance (Eq a, Eq o, Eq (Operation a)) => Eq (SimpleSerialization a o)
@@ -140,16 +149,16 @@ instance SymbioteOperation a o => Symbiote a o (SimpleSerialization a o) where
   decodeOp _ = Nothing
 
 
--- | Register a topic in the test suite
+-- | Register a topic in the test suite builder.
 register :: forall a o s m
           . Arbitrary a
          => Arbitrary (Operation a)
          => Symbiote a o s
          => Eq o
          => MonadIO m
-         => Topic
+         => Topic -- ^ Topic name as a 'Text'
          -> Int32 -- ^ Max size
-         -> Proxy a -- ^ Reference to datatype
+         -> Proxy a -- ^ Reference to the datatype
          -> SymbioteT s m ()
 register t maxSize Proxy = do
   generation <- liftIO (newTVarIO newGeneration)
@@ -170,16 +179,25 @@ register t maxSize Proxy = do
         }
   modify' (Map.insert t (ExistsSymbiote newState))
 
--- | Messages sent by a peer during their generating phase
+
+---------------- Protocol Messages -----------------------
+
+
+-- | Messages sent by a peer during their generating phase - polymorphic in the serialization medium.
 data Generating s
-  = Generated
+  = -- | \"I\'ve generated a value and operation, here you go.\"
+    Generated
     { genValue :: s
     , genOperation :: s
     }
-  | BadResult s -- ^ Expected value
-  | YourTurn
-  | ImFinished
-  | GeneratingNoParseOperated s
+  | -- | \"You sent the wrong value!\"
+    BadResult s
+  | -- | \"It\'s your turn to generate, I just finished and we\'re both O.K.\"
+    YourTurn
+  | -- | \"I just finished all generation, and my topic state\'s 'size' is equal to the 'maxSize'.\"
+    ImFinished
+  | -- | \"I could not deserialize the output value sent by you, and I have to tell you about it.\"
+    GeneratingNoParseOperated s
   deriving (Eq, Show, Generic)
 instance Arbitrary s => Arbitrary (Generating s) where
   arbitrary = oneof
@@ -244,11 +262,14 @@ instance Serialize (Generating LBS.ByteString) where
       4 -> GeneratingNoParseOperated <$> getLazyByteString'
       _ -> fail "Generating LazyByteString"
 
--- | Messages sent by a peer during their operating phase
+-- | Messages sent by a peer during their operating phase - polymorphic in the serialization medium.
 data Operating s
-  = Operated s -- ^ Serialized value after operation
-  | OperatingNoParseValue s
-  | OperatingNoParseOperation s
+  = -- | \"I\'ve performed the operation on the value, and here's the output result.\"
+    Operated s
+  | -- | \"I couldn't deserialize the input value sent by you, and I have to tell you about it.\"
+    OperatingNoParseValue s
+  | -- | \"I couldn't deserialize the operation sent by you, and I have to tell you about it.\"
+    OperatingNoParseOperation s
   deriving (Eq, Show, Generic)
 instance Arbitrary s => Arbitrary (Operating s) where
   arbitrary = oneof
@@ -295,14 +316,17 @@ instance Serialize (Operating LBS.ByteString) where
       2 -> OperatingNoParseOperation <$> getLazyByteString'
       _ -> fail "Operating LazyByteString"
 
--- | Messages sent by the first peer
+-- | Messages sent by the first peer - polymorphic in the serialization medium.
 data First s
-  = AvailableTopics (Map Topic Int32) -- ^ Mapping of topics to their gen size
-  | FirstGenerating
+  = -- | \"Here are the topics I support.\"
+    AvailableTopics (Map Topic Int32)
+  | -- | \"It\'s my turn to generate, so here\'s a generating message.\"
+    FirstGenerating
     { firstGeneratingTopic :: Topic
     , firstGenerating :: Generating s
     }
-  | FirstOperating
+  | -- | \"It's my turn to operate, so here\'s my operating message.\"
+    FirstOperating
     { firstOperatingTopic :: Topic
     , firstOperating :: Operating s
     }
@@ -366,26 +390,32 @@ instance Serialize (First LBS.ByteString) where
       2 -> FirstOperating <$> get <*> get
       _ -> fail "First s"
 
+-- | Convenience function for avoiding a case match over First
 getFirstGenerating :: First s -> Maybe (Topic, Generating s)
 getFirstGenerating x = case x of
   FirstGenerating topic g -> Just (topic, g)
   _ -> Nothing
 
+-- | Convenience function for avoiding a case match over First
 getFirstOperating :: First s -> Maybe (Topic, Operating s)
 getFirstOperating x = case x of
   FirstOperating topic g -> Just (topic, g)
   _ -> Nothing
 
 
--- | Messages sent by the second peer
+-- | Messages sent by the second peer - polymorphic in the serialization medium.
 data Second s
-  = BadTopics (Map Topic Int32)
-  | Start
-  | SecondOperating
+  = -- | \"Your topics available do not match my topics, which are the following.\"
+    BadTopics (Map Topic Int32)
+  | -- | \"All systems nominal, you may fire when ready.\"
+    Start
+  | -- | \"It's my turn to operate, so here\'s my operating message.\"
+    SecondOperating
     { secondOperatingTopic :: Topic
     , secondOperating :: Operating s
     }
-  | SecondGenerating
+  | -- | \"It's my turn to generate, so here\'s my generating message.\"
+    SecondGenerating
     { secondGeneratingTopic :: Topic
     , secondGenerating :: Generating s
     }
@@ -458,26 +488,34 @@ instance Serialize (Second LBS.ByteString) where
       3 -> SecondGenerating <$> get <*> get
       _ -> fail "Second s"
 
+-- | Convenience function for avoiding a case match over First
 getSecondGenerating :: Second s -> Maybe (Topic, Generating s)
 getSecondGenerating x = case x of
   SecondGenerating topic g -> Just (topic, g)
   _ -> Nothing
 
+-- | Convenience function for avoiding a case match over First
 getSecondOperating :: Second s -> Maybe (Topic, Operating s)
 getSecondOperating x = case x of
   SecondOperating topic g -> Just (topic, g)
   _ -> Nothing
 
 
+-- | Exception data type
 data Failure them s
-  = BadTopicsFailure
+  = -- | Topic sets do not match between peers
+    BadTopicsFailure
     { badTopicsFirst :: Map Topic Int32
     , badTopicsSecond :: Map Topic Int32
     }
-  | OutOfSyncFirst (First s)
-  | OutOfSyncSecond (Second s)
-  | TopicNonexistent Topic
-  | WrongTopic
+  | -- | The first peer is out of sync and not sending the correct message
+    OutOfSyncFirst (First s)
+  | -- | The second peer is out of sync and not sending the correct message
+    OutOfSyncSecond (Second s)
+  | -- | Topic does not exist
+    TopicNonexistent Topic
+  | -- | Got the wrong topic
+    WrongTopic
     { wrongTopicExpected :: Topic
     , wrongTopicGot :: Topic
     }
@@ -486,10 +524,14 @@ data Failure them s
   | CantParseGeneratedOperation Topic s
   | CantParseLocalValue Topic s
   | CantParseLocalOperation Topic s
-  | BadOperating Topic (Operating s)
-  | BadGenerating Topic (Generating s)
-  | BadThem Topic (them s)
-  | SafeFailure
+  | -- | Incorrect operating message received
+    BadOperating Topic (Operating s)
+  | -- | Incorrect generating message received
+    BadGenerating Topic (Generating s)
+  | -- | Incorrect peer message ('First' and 'Second' agnostic)
+    BadThem Topic (them s)
+  | -- | Failed because the output of the operation applied to the value does not match between the peers.
+    SafeFailure
     { safeFailureTopic :: Topic
     , safeFailureExpected :: s
     , safeFailureGot :: s
@@ -497,15 +539,15 @@ data Failure them s
   deriving (Eq, Show)
 
 
--- | Via putStrLn
+-- | Via 'putStrLn'
 defaultSuccess :: Topic -> IO ()
 defaultSuccess (Topic t) = putStrLn $ "Topic " ++ unpack t ++ " succeeded"
 
--- | Via putStrLn
+-- | Via 'putStrLn'
 defaultFailure :: Show (them s) => Show s => Failure them s -> IO ()
 defaultFailure f = error $ "Failure: " ++ show f
 
--- | Via putStrLn
+-- | Via 'putStrLn'
 defaultProgress :: Topic -> Float -> IO ()
 defaultProgress (Topic t) p = putStrLn $ "Topic " ++ unpack t ++ ": " ++ printf "%.2f" (p * 100.0) ++ "%"
 
@@ -514,7 +556,7 @@ nullProgress :: Applicative m => Topic -> Float -> m ()
 nullProgress _ _ = pure ()
 
 
--- | Run the test suite as the first peer - see 'Test.Serialization.Symbiote.WebSocket' for end-user
+-- | Run the test suite as the first peer - see "Test.Serialization.Symbiote.WebSocket" for end-user
 -- implementations.
 firstPeer :: forall m s
            . MonadIO m
@@ -563,7 +605,7 @@ firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
     _ -> onFailure $ OutOfSyncSecond shouldBeStart
 
 
--- | Run the test suite as the second peer - see 'Test.Serialization.Symbiote.WebSocket' for end-user
+-- | Run the test suite as the second peer - see "Test.Serialization.Symbiote.WebSocket" for end-user
 -- implementations.
 secondPeer :: forall s m
             . MonadIO m

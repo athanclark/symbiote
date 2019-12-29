@@ -52,4 +52,5 @@ until a maximum is reached (which is clarified in the documentation).
 
 -------------
 
-For an example, check out the tests - they are performed locally in an asynchronous channel, but achieve the right goal.
+For an example, check out the tests - they are performed both locally in an asynchronous channel, and remotely
+with its sister package - [purescript-symbiote](https://pursuit.purescript.org/package/purescript-symbiote).
