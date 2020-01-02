@@ -220,6 +220,7 @@ peerWebSocketJson runClientAppT debug = peerWebSocket
   )
   debug
 
+-- | WebSockets can work with both Json 'Value's and 'BS.ByteString's
 peerWebSocket :: forall m stM s them me
                . MonadIO m
               => MonadBaseControl IO m stM
@@ -236,7 +237,7 @@ peerWebSocket :: forall m stM s them me
                 -> (Topic -> Float -> m ())
                 -> SymbioteT s m ()
                 -> m ()
-                 )
+                 ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
               -> SymbioteT s m () -- ^ Tests registered
               -> m ()
 peerWebSocket webSocket debug peer tests = do

@@ -33,7 +33,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Control.Aligned (MonadBaseControl)
 import Control.Concurrent.Async (Async, cancel)
 import Control.Concurrent.STM (TChan, TMVar, newTChanIO, writeTChan, readTChan, newEmptyTMVarIO, putTMVar, takeTMVar, atomically)
-import System.ZMQ4 (Pair (..))
+import System.ZMQ4 (Router (..), Dealer (..))
 import System.ZMQ4.Monadic (runZMQ, async)
 import System.ZMQ4.Simple (socket, bind, send, receive)
 
@@ -59,6 +59,7 @@ firstPeerZeroMQ :: MonadIO m
                 -> m ()
 firstPeerZeroMQ host debug = peerZeroMQ host debug firstPeer
 
+-- | ZeroMQ can only work on 'BS.ByteString's
 peerZeroMQ :: forall m stM them me
             . MonadIO m
            => MonadBaseControl IO m stM
@@ -74,7 +75,7 @@ peerZeroMQ :: forall m stM them me
              -> (Topic -> Float -> m ())
              -> SymbioteT BS.ByteString m ()
              -> m ()
-               )
+              ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
            -> SymbioteT BS.ByteString m () -- ^ Tests registered
            -> m ()
 peerZeroMQ host debug peer tests = do
@@ -89,8 +90,8 @@ peerZeroMQ host debug peer tests = do
         NoDebug -> nullProgress t n
         _ -> liftIO (defaultProgress t n)
   zThread <- runZMQ $ async $ do
-    s <- socket Pair Pair
-    bind s host
+    s <- socket Dealer Router -- FIXME TODO this is only a server, need to support client too
+    bind s host               --    <------
     outgoingThread <- async $ forever $ do
       x <- liftIO (atomically (readTChan outgoing))
       send () s ((Cereal.encode x) :| [])
