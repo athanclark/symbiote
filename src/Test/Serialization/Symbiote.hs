@@ -321,6 +321,8 @@ instance Serialize (Operating LBS.ByteString) where
 data First s
   = -- | \"Here are the topics I support.\"
     AvailableTopics (Map Topic Int32)
+  | -- | \"I got your subset of topics, but they don\'t match to mine.\"
+    BadStartSubset
   | -- | \"It\'s my turn to generate, so here\'s a generating message.\"
     FirstGenerating
     { firstGeneratingTopic :: Topic
@@ -520,6 +522,8 @@ data Failure them s
     { badTopicsFirst :: Map Topic Int32
     , badTopicsSecond :: Map Topic Int32
     }
+  | -- | The first peer doesn\'t have the subset topics identified by second
+    BadStartSubsetFailure (Set Topic)
   | -- | The first peer is out of sync and not sending the correct message
     OutOfSyncFirst (First s)
   | -- | The second peer is out of sync and not sending the correct message
@@ -582,39 +586,43 @@ firstPeer :: forall m s
           -> m ()
 firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
   state <- runSymbioteT x True
-  let topics = go <$> state
+  let myTopics = go <$> state
         where
           go s = case s of
             ExistsSymbiote s' -> maxSize s'
-  encodeAndSend (AvailableTopics topics)
+  encodeAndSend (AvailableTopics myTopics)
   shouldBeStart <- receiveAndDecode
   case shouldBeStart of
-    BadTopics badTopics -> onFailure $ BadTopicsFailure topics badTopics
-    Start -> do
-      topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
-      let processAllTopics = do
-            mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
-            case mTopicToProcess of
-              Nothing -> pure () -- done
-              Just (topic, newTopics) -> do
-                liftIO (atomically (writeTVar topicsToProcess newTopics))
-                case Map.lookup topic state of
-                  Nothing -> onFailure $ TopicNonexistent topic
-                  Just symbioteState -> do
-                    hasSentFinishedVar <- liftIO $ newTVarIO HasntSentFinished
-                    hasReceivedFinishedVar <- liftIO $ newTVarIO HasntReceivedFinished
-                    generating
-                      encodeAndSend receiveAndDecode
-                      FirstGenerating FirstOperating
-                      getSecondGenerating getSecondOperating
-                      hasSentFinishedVar hasReceivedFinishedVar
-                      processAllTopics
-                      onSuccess
-                      onFailure
-                      onProgress
-                      topic symbioteState
-      processAllTopics
-    _ -> onFailure $ OutOfSyncSecond shouldBeStart
+    BadTopics badTopics -> onFailure (BadTopicsFailure myTopics badTopics)
+    Start topicsSubset
+      | not (topicsSubset `Set.isSubsetOf` Map.keysSet myTopics) -> do
+        encodeAndSend BadStartSubset
+        onFailure (BadStartSubsetFailure topicsSubset)
+      | otherwise -> do
+        topicsToProcess <- liftIO (newTVarIO topicsSubset)
+        let processAllTopics = do
+              mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
+              case mTopicToProcess of
+                Nothing -> pure () -- done
+                Just (topic, newTopics) -> do
+                  liftIO (atomically (writeTVar topicsToProcess newTopics))
+                  case Map.lookup topic state of
+                    Nothing -> onFailure (TopicNonexistent topic)
+                    Just symbioteState -> do
+                      hasSentFinishedVar <- liftIO (newTVarIO HasntSentFinished)
+                      hasReceivedFinishedVar <- liftIO (newTVarIO HasntReceivedFinished)
+                      generating
+                        encodeAndSend receiveAndDecode
+                        FirstGenerating FirstOperating
+                        getSecondGenerating getSecondOperating
+                        hasSentFinishedVar hasReceivedFinishedVar
+                        processAllTopics
+                        onSuccess
+                        onFailure
+                        onProgress
+                        topic symbioteState
+        processAllTopics
+    _ -> onFailure (OutOfSyncSecond shouldBeStart)
 
 
 -- | Run the test suite as the second peer - see "Test.Serialization.Symbiote.WebSocket" and "Test.Serialization.Symbiote.ZeroMQ" for end-user
@@ -633,18 +641,18 @@ secondPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
   state <- runSymbioteT x False
   shouldBeAvailableTopics <- receiveAndDecode
   case shouldBeAvailableTopics of
-    AvailableTopics topics -> do
+    AvailableTopics topicsAvailable -> do
       let myTopics = go <$> state
             where
               go s = case s of
                 ExistsSymbiote s' -> maxSize s'
-      if myTopics /= topics
+      if not (myTopics `Map.isSubmapOf` topicsAvailable)
         then do
           encodeAndSend (BadTopics myTopics)
-          onFailure $ BadTopicsFailure topics myTopics
+          onFailure (BadTopicsFailure topicsAvailable myTopics)
         else do
-          encodeAndSend Start
-          topicsToProcess <- liftIO (newTVarIO (Map.keysSet topics))
+          encodeAndSend (Start (Map.keysSet myTopics))
+          topicsToProcess <- liftIO (newTVarIO (Map.keysSet myTopics))
           let processAllTopics = do
                 mTopicToProcess <- Set.maxView <$> liftIO (readTVarIO topicsToProcess)
                 case mTopicToProcess of
@@ -652,10 +660,10 @@ secondPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
                   Just (topic, newTopics) -> do
                     liftIO (atomically (writeTVar topicsToProcess newTopics))
                     case Map.lookup topic state of
-                      Nothing -> onFailure $ TopicNonexistent topic
+                      Nothing -> onFailure (TopicNonexistent topic)
                       Just symbioteState -> do
-                        hasSentFinishedVar <- liftIO $ newTVarIO HasntSentFinished
-                        hasReceivedFinishedVar <- liftIO $ newTVarIO HasntReceivedFinished
+                        hasSentFinishedVar <- liftIO (newTVarIO HasntSentFinished)
+                        hasReceivedFinishedVar <- liftIO (newTVarIO HasntReceivedFinished)
                         operating
                           encodeAndSend receiveAndDecode
                           SecondGenerating SecondOperating
@@ -667,7 +675,7 @@ secondPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
                           onProgress
                           topic symbioteState
           processAllTopics
-    _ -> onFailure $ OutOfSyncFirst shouldBeAvailableTopics
+    _ -> onFailure (OutOfSyncFirst shouldBeAvailableTopics)
 
 
 data HasSentFinished
