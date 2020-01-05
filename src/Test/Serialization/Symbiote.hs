@@ -99,6 +99,7 @@ import Test.Serialization.Symbiote.Core
 
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -405,10 +406,11 @@ getFirstOperating x = case x of
 
 -- | Messages sent by the second peer - polymorphic in the serialization medium.
 data Second s
-  = -- | \"Your topics available do not match my topics, which are the following.\"
+  = -- | \"Although my topics should be at least a subset of your topics available,
+    -- the following of mine do not have the same max size as yours.\"
     BadTopics (Map Topic Int32)
-  | -- | \"All systems nominal, you may fire when ready.\"
-    Start
+  | -- | \"All systems nominal, you may fire (the following subset of topics) when ready.\"
+    Start (Set Topic)
   | -- | \"It's my turn to operate, so here\'s my operating message.\"
     SecondOperating
     { secondOperatingTopic :: Topic
@@ -423,29 +425,27 @@ data Second s
 instance Arbitrary s => Arbitrary (Second s) where
   arbitrary = oneof
     [ BadTopics <$> arbitrary
-    , pure Start
+    , Start <$> arbitrary
     , SecondOperating <$> arbitrary <*> arbitrary
     , SecondGenerating <$> arbitrary <*> arbitrary
     ]
 instance ToJSON s => ToJSON (Second s) where
   toJSON x = case x of
     BadTopics ts -> object ["badTopics" .= ts]
-    Start -> String "start"
+    Start ts -> object ["start" .= ts]
     SecondOperating t y -> object ["secondOperating" .= object ["topic" .= t, "operating" .= y]]
     SecondGenerating t y -> object ["secondGenerating" .= object ["topic" .= t, "generating" .= y]]
 instance FromJSON s => FromJSON (Second s) where
-  parseJSON (Object o) = badTopics <|> secondOperating' <|> secondGenerating'
+  parseJSON (Object o) = badTopics <|> start <|> secondOperating' <|> secondGenerating'
     where
       badTopics = BadTopics <$> o .: "badTopics"
+      start = Start <$> o .: "start"
       secondOperating' = do
         o' <- o .: "secondOperating"
         SecondOperating <$> o' .: "topic" <*> o' .: "operating"
       secondGenerating' = do
         o' <- o .: "secondGenerating"
         SecondGenerating <$> o' .: "topic" <*> o' .: "generating"
-  parseJSON x@(String s)
-    | s == "start" = pure Start
-    | otherwise = typeMismatch "Second s" x
   parseJSON x = typeMismatch "Second s" x
 instance Serialize (Second BS.ByteString) where
   put x = case x of
@@ -454,7 +454,11 @@ instance Serialize (Second BS.ByteString) where
       let ls = Map.toList ts
       putInt32be (fromIntegral (length ls))
       void (traverse put ls)
-    Start -> putWord8 1
+    Start ts -> do
+      putWord8 1
+      let ls = Set.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
     SecondOperating t y -> putWord8 2 *> put t *> put y
     SecondGenerating t y -> putWord8 3 *> put t *> put y
   get = do
@@ -463,7 +467,9 @@ instance Serialize (Second BS.ByteString) where
       0 -> do
         l <- getInt32be
         BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
-      1 -> pure Start
+      1 -> do
+        l <- getInt32be
+        Start . Set.fromList <$> replicateM (fromIntegral l) get
       2 -> SecondOperating <$> get <*> get
       3 -> SecondGenerating <$> get <*> get
       _ -> fail "Second s"
@@ -474,7 +480,11 @@ instance Serialize (Second LBS.ByteString) where
       let ls = Map.toList ts
       putInt32be (fromIntegral (length ls))
       void (traverse put ls)
-    Start -> putWord8 1
+    Start ts -> do
+      putWord8 1
+      let ls = Set.toList ts
+      putInt32be (fromIntegral (length ls))
+      void (traverse put ls)
     SecondOperating t y -> putWord8 2 *> put t *> put y
     SecondGenerating t y -> putWord8 3 *> put t *> put y
   get = do
@@ -483,7 +493,9 @@ instance Serialize (Second LBS.ByteString) where
       0 -> do
         l <- getInt32be
         BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
-      1 -> pure Start
+      1 -> do
+        l <- getInt32be
+        Start . Set.fromList <$> replicateM (fromIntegral l) get
       2 -> SecondOperating <$> get <*> get
       3 -> SecondGenerating <$> get <*> get
       _ -> fail "Second s"
