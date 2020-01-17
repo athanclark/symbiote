@@ -8,6 +8,8 @@
 
 module Spec.Protocol where
 
+import ServerOrClient (ServerOrClient (..))
+
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Types as Json
 import qualified Data.Serialize as Cereal
@@ -20,11 +22,11 @@ import Test.Serialization.Symbiote
   (SymbioteOperation (..), Generating, Operating, First, Second, Topic, SymbioteT, register)
 import Test.Serialization.Symbiote.Debug (Debug (..))
 import Test.Serialization.Symbiote.WebSocket (firstPeerWebSocketJson, firstPeerWebSocketByteString)
-import Test.Serialization.Symbiote.ZeroMQ (firstPeerZeroMQ)
+import Test.Serialization.Symbiote.ZeroMQ (firstPeerZeroMQ, ZeroMQParams (..), ZeroMQServerOrClient (..))
 import Test.Serialization.Symbiote.Aeson ()
 import Test.Serialization.Symbiote.Cereal ()
 import Test.QuickCheck (Arbitrary (..))
-import Test.Tasty (TestTree, testGroup)
+import Test.Tasty (TestTree, testGroup, askOption)
 import Test.Tasty.HUnit (testCase)
 import Network.WebSockets.Connection (defaultConnectionOptions)
 import Network.WebSockets.Simple (accept)
@@ -38,50 +40,50 @@ import Network.HTTP.Types (status400)
 
 protocolTests :: [TestTree]
 protocolTests =
-  [ testGroup "WebSocket Server"
-    [ testCase "Json" $
-        let tests :: SymbioteT Json.Value IO ()
-            tests = do
-              register "Generating Topic" 100 (Proxy :: Proxy (Generating Topic))
-              register "Operating Topic" 100 (Proxy :: Proxy (Operating Topic))
-              register "First Topic" 100 (Proxy :: Proxy (First Topic))
-              register "Second Topic" 100 (Proxy :: Proxy (Second Topic))
-              register "Topic" 100 (Proxy :: Proxy Topic)
-            runClient client = do
-              -- runServer "localhost" 3000 server'
-              let server = accept client
-              server' <- runServerAppT server
-              liftIO $ run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
-                respond $ responseLBS status400 [] "Not a websocket"
-        in  firstPeerWebSocketJson runClient NoDebug tests
-    , testCase "ByteString" $
-        let tests :: SymbioteT BS.ByteString IO ()
-            tests = do
-              register "Generating ByteString" 50 (Proxy :: Proxy (Generating BS.ByteString))
-              register "Operating ByteString" 50 (Proxy :: Proxy (Operating BS.ByteString))
-              register "First ByteString" 50 (Proxy :: Proxy (First BS.ByteString))
-              register "Second ByteString" 50 (Proxy :: Proxy (Second BS.ByteString))
-              register "Topic" 50 (Proxy :: Proxy Topic)
-            runClient client = do
-              -- runServer "localhost" 3000 server'
-              let server = accept client
-              server' <- runServerAppT server
-              liftIO $ run 3001 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
-                respond $ responseLBS status400 [] "Not a websocket"
-        in  firstPeerWebSocketByteString runClient NoDebug tests
-    ]
-  , testGroup "ZeroMQ Server"
-    [ testCase "ByteString" $
-        let tests :: SymbioteT BS.ByteString IO ()
-            tests = do
-              register "Generating ByteString" 50 (Proxy :: Proxy (Generating BS.ByteString))
-              register "Operating ByteString" 50 (Proxy :: Proxy (Operating BS.ByteString))
-              register "First ByteString" 50 (Proxy :: Proxy (First BS.ByteString))
-              register "Second ByteString" 50 (Proxy :: Proxy (Second BS.ByteString))
-              register "Topic" 50 (Proxy :: Proxy Topic)
-        in  firstPeerZeroMQ "tcp://*:3002" NoDebug tests
-    ]
+  [ askOption $ \serverOrClient -> case serverOrClient of
+      Server -> testGroup "WebSocket Server"
+        [ testCase "Json" $
+            let runClient client = do
+                  -- runServer "localhost" 3000 server'
+                  let server = accept client
+                  server' <- runServerAppT server
+                  liftIO $ run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
+                    respond $ responseLBS status400 [] "Not a websocket"
+            in  firstPeerWebSocketJson runClient NoDebug jsonTests
+        , testCase "ByteString" $
+            let runClient client = do
+                  -- runServer "localhost" 3000 server'
+                  let server = accept client
+                  server' <- runServerAppT server
+                  liftIO $ run 3001 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
+                    respond $ responseLBS status400 [] "Not a websocket"
+            in  firstPeerWebSocketByteString runClient NoDebug byteStringTests
+        ]
+      Client -> undefined
+  , askOption $ \serverOrClient -> case serverOrClient of
+      Server -> testGroup "ZeroMQ Server"
+        [ testCase "ByteString" $
+            firstPeerZeroMQ
+              ZeroMQParams{zmqHost = "tcp://*:3002", zmqServerOrClient = ZeroMQServer}
+              NoDebug byteStringTests
+        ]
+      Client -> undefined
   ]
+  where
+    jsonTests :: SymbioteT Json.Value IO ()
+    jsonTests = do
+      register "Generating Topic" 100 (Proxy :: Proxy (Generating Topic))
+      register "Operating Topic" 100 (Proxy :: Proxy (Operating Topic))
+      register "First Topic" 100 (Proxy :: Proxy (First Topic))
+      register "Second Topic" 100 (Proxy :: Proxy (Second Topic))
+      register "Topic" 100 (Proxy :: Proxy Topic)
+    byteStringTests :: SymbioteT BS.ByteString IO ()
+    byteStringTests = do
+      register "Generating ByteString" 50 (Proxy :: Proxy (Generating BS.ByteString))
+      register "Operating ByteString" 50 (Proxy :: Proxy (Operating BS.ByteString))
+      register "First ByteString" 50 (Proxy :: Proxy (First BS.ByteString))
+      register "Second ByteString" 50 (Proxy :: Proxy (Second BS.ByteString))
+      register "Topic" 50 (Proxy :: Proxy Topic)
 
 -- Internal instances
 instance SymbioteOperation (Generating s) (Generating s) where
