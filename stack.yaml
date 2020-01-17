@@ -36,6 +36,7 @@ packages:
 #
 extra-deps:
   - abides-0.0.1
+  - threaded-0.0.0
   - websockets-simple-0.2.0
   - websockets-simple-extra-0.0.0
   - zeromq4-simple-0.0.0.2

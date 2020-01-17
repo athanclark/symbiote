@@ -12,6 +12,13 @@ packages:
   original:
     hackage: abides-0.0.1
 - completed:
+    hackage: threaded-0.0.0@sha256:b24a45f973be181a7fb204199663cde87803d1fef140ebdebc9788b31e213292,1673
+    pantry-tree:
+      size: 460
+      sha256: da304e0ab62bb6ff812322de387b8ec5a94a3884c5b5288b893a83a55785ee21
+  original:
+    hackage: threaded-0.0.0
+- completed:
     hackage: websockets-simple-0.2.0@sha256:aadc52e93864fedf5e963e2915ea50b9769017141d5f13aef362b94199a65319,1971
     pantry-tree:
       size: 406

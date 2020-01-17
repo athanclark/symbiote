@@ -26,6 +26,7 @@ dependencies:
 - async
 - bytestring
 - cereal
+- chan
 - containers
 - exceptions
 - extractable-singleton
@@ -33,6 +34,7 @@ dependencies:
 - mtl
 - stm
 - text
+- threaded
 - QuickCheck
 - quickcheck-instances
 - websockets-simple >= 0.2.0
