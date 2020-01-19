@@ -31,10 +31,11 @@ import Data.Singleton.Class (Extractable)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Control.Aligned (MonadBaseControl)
-import Control.Concurrent.Async (Async, cancel)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (cancel)
 import Control.Concurrent.Chan.Scope (Scope (Read, Write))
 import Control.Concurrent.Chan.Extra (writeOnly)
-import Control.Concurrent.STM (TChan, TMVar, newTChanIO, writeTChan, readTChan, newEmptyTMVarIO, putTMVar, atomically)
+import Control.Concurrent.STM (TChan, newTChanIO, writeTChan, readTChan, atomically)
 import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
 import Control.Concurrent.Threaded.Hash (threaded)
 import System.ZMQ4 (Router (..), Dealer (..), Pair (..))
@@ -99,7 +100,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
       (incoming :: TChanRW 'Write (ZMQIdent, them BS.ByteString)) <- writeOnly <$> liftIO (atomically newTChanRW)
       -- the process that gets invoked for each new thread. Writes to a @me BS.ByteString@ and reads from a @them BS.ByteString@.
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
-          process inputs outputs =
+          process inputs outputs = do
             let encodeAndSend :: me BS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
 
@@ -111,7 +112,9 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
                   _ -> liftIO (defaultProgress t n)
-            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            liftIO (threadDelay 1000000)
+
       -- manage invoked threads
       ( mainThread
         , outgoing :: TChanRW 'Read (ZMQIdent, me BS.ByteString)

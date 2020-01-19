@@ -37,6 +37,7 @@ import Control.Monad (forever, void)
 import Control.Monad.Trans.Control.Aligned (MonadBaseControl, liftBaseWith)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Catch (MonadCatch)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
   ( TChan, TMVar, newTChanIO, readTChan, writeTChan, atomically
   , newEmptyTMVarIO, putTMVar, takeTMVar)
@@ -131,57 +132,11 @@ peerWebSocketLazyByteString :: forall m stM them me
                               )
                             -> SymbioteT LBS.ByteString m () -- ^ Tests registered
                             -> m ()
-peerWebSocketLazyByteString webSocketParams debug peer tests =
-  case webSocketParams of
-    WebSocketParams runWebSocket _ Private -> do
+peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network) debug peer tests
+  | network == Private || (network == Public && clientOrServer == WebSocketClient) = do
       (outgoing :: TChan (me LBS.ByteString)) <- liftIO newTChanIO
       (incoming :: TChan (them LBS.ByteString)) <- liftIO newTChanIO
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
-          receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
-          onFailure = liftIO . defaultFailure
-          onProgress t n = case debug of
-            NoDebug -> nullProgress t n
-            _ -> liftIO (defaultProgress t n)
-
-          onOpen :: WebSocketsAppParams IO (me LBS.ByteString) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString)
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ -> atomically . writeTChan incoming
-            , onOpen
-            }
-      let webSocket app =
-            runWebSocket $ toClientAppTBinary $
-              ( case debug of
-                  FullDebug -> logStdout
-                  _ -> id
-              ) $ dimap' receive Cereal.encodeLazy app
-            where
-              receive :: LBS.ByteString -> IO (them LBS.ByteString)
-              receive buf = do
-                let eX = Cereal.decodeLazy buf
-                case eX of
-                  Left e -> do
-                    putStrLn ("Can't parse buffer: " ++ show buf)
-                    error e
-                  Right x -> pure x
-      wsThread <- liftIO (async (webSocket app))
-      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
-      liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketClient Public -> do
-      (outgoing :: TChan (me LBS.ByteString)) <- liftIO newTChanIO
-      (incoming :: TChan (them LBS.ByteString)) <- liftIO newTChanIO
-      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-
-      ident <- liftIO newWebSocketIdent
-      let mkWsMessage = WithWebSocketIdent ident
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
@@ -191,28 +146,15 @@ peerWebSocketLazyByteString webSocketParams debug peer tests =
             NoDebug -> nullProgress t n
             _ -> liftIO (defaultProgress t n)
 
-          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ do
-              x <- atomically (readTChan outgoing)
-              send (mkWsMessage x)
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them LBS.ByteString)) (WithWebSocketIdent (me LBS.ByteString))
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
-            , onOpen
-            }
-      let webSocket app =
+          webSocket :: forall a b. Serialize a => Serialize b => WebSocketsApp IO a b -> IO ()
+          webSocket app =
             runWebSocket $ toClientAppTBinary $
               ( case debug of
                   FullDebug -> logStdout
                   _ -> id
               ) $ dimap' receive Cereal.encodeLazy app
             where
-              receive :: LBS.ByteString -> IO (WithWebSocketIdent (them LBS.ByteString))
+              receive :: LBS.ByteString -> IO a
               receive buf = do
                 let eX = Cereal.decodeLazy buf
                 case eX of
@@ -220,16 +162,49 @@ peerWebSocketLazyByteString webSocketParams debug peer tests =
                     putStrLn ("Can't parse buffer: " ++ show buf)
                     error e
                   Right x -> pure x
-      wsThread <- liftIO (async (webSocket app))
+      wsThread <- case network of
+        Private -> do
+          let onOpen :: WebSocketsAppParams IO (me LBS.ByteString) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString)
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ -> atomically . writeTChan incoming
+                , onOpen
+                }
+          liftIO (async (webSocket app))
+        Public -> do
+          ident <- liftIO newWebSocketIdent
+          let mkWsMessage = WithWebSocketIdent ident
+
+              onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ do
+                  x <- atomically (readTChan outgoing)
+                  send (mkWsMessage x)
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (WithWebSocketIdent (them LBS.ByteString)) (WithWebSocketIdent (me LBS.ByteString))
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+                , onOpen
+                }
+          liftIO (async (webSocket app))
+
       peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
       liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketServer Public -> do
-      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+  | otherwise = do
       (incoming :: TChanRW 'Write (WebSocketIdent, them LBS.ByteString))
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
       let process :: TChanRW 'Read (them LBS.ByteString) -> TChanRW 'Write (me LBS.ByteString) -> m ()
-          process inputs outputs =
+          process inputs outputs = do
             let encodeAndSend :: me LBS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
                 receiveAndDecode :: m (them LBS.ByteString)
@@ -240,7 +215,8 @@ peerWebSocketLazyByteString webSocketParams debug peer tests =
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
                   _ -> liftIO (defaultProgress t n)
-            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            liftIO (threadDelay 1000000)
 
       ( mainThread
         , outgoing :: TChanRW 'Read (WebSocketIdent, me LBS.ByteString)
@@ -303,64 +279,11 @@ peerWebSocketByteString :: forall m stM them me
                           ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
                         -> SymbioteT BS.ByteString m () -- ^ Tests registered
                         -> m ()
-peerWebSocketByteString webSocketParams debug peer tests =
-  case webSocketParams of
-    WebSocketParams runWebSocket _ Private -> do
+peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) debug peer tests
+  | network == Private || (network == Public && clientOrServer == WebSocketClient) = do
       (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
       (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
-          receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
-          onFailure = liftIO . defaultFailure
-          onProgress t n = case debug of
-            NoDebug -> nullProgress t n
-            _ -> liftIO (defaultProgress t n)
-
-          onOpen :: WebSocketsAppParams IO (me BS.ByteString) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString)
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ -> atomically . writeTChan incoming
-            , onOpen
-            }
-      let webSocket app =
-            runWebSocket $ toClientAppTBinary $ toLazy $
-              ( case debug of
-                  FullDebug -> logStdout
-                  _ -> id
-              ) $ dimap' receive Cereal.encode app
-            where
-              receive :: BS.ByteString -> IO (them BS.ByteString)
-              receive buf = do
-                let eX = Cereal.decode buf
-                case eX of
-                  Left e -> do
-                    putStrLn ("Can't parse buffer: " ++ show buf)
-                    error e
-                  Right x -> pure x
-
-              toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString
-                     -> WebSocketsApp IO LBS.ByteString LBS.ByteString
-              toLazy = dimap' r s
-                where
-                  r = pure . LBS.toStrict
-                  s = LBS.fromStrict
-      wsThread <- liftIO (async (webSocket app))
-      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
-      liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketClient Public -> do
-      (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
-      (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
-      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-
-      ident <- liftIO newWebSocketIdent
-      let mkWsMessage = WithWebSocketIdent ident
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
@@ -370,28 +293,15 @@ peerWebSocketByteString webSocketParams debug peer tests =
             NoDebug -> nullProgress t n
             _ -> liftIO (defaultProgress t n)
 
-          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ do
-              x <- atomically (readTChan outgoing)
-              send (mkWsMessage x)
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them BS.ByteString)) (WithWebSocketIdent (me BS.ByteString))
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
-            , onOpen
-            }
-      let webSocket app =
+          webSocket :: forall a b. Serialize a => Serialize b => WebSocketsApp IO a b -> IO ()
+          webSocket app =
             runWebSocket $ toClientAppTBinary $ toLazy $
               ( case debug of
                   FullDebug -> logStdout
                   _ -> id
               ) $ dimap' receive Cereal.encode app
             where
-              receive :: BS.ByteString -> IO (WithWebSocketIdent (them BS.ByteString))
+              receive :: BS.ByteString -> IO a
               receive buf = do
                 let eX = Cereal.decode buf
                 case eX of
@@ -401,21 +311,54 @@ peerWebSocketByteString webSocketParams debug peer tests =
                   Right x -> pure x
 
               toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString
-                     -> WebSocketsApp IO LBS.ByteString LBS.ByteString
+                    -> WebSocketsApp IO LBS.ByteString LBS.ByteString
               toLazy = dimap' r s
                 where
                   r = pure . LBS.toStrict
                   s = LBS.fromStrict
-      wsThread <- liftIO (async (webSocket app))
+      wsThread <- case network of
+        Private -> do
+          let onOpen :: WebSocketsAppParams IO (me BS.ByteString) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString)
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ -> atomically . writeTChan incoming
+                , onOpen
+                }
+          liftIO (async (webSocket app))
+        Public -> do
+          ident <- liftIO newWebSocketIdent
+          let mkWsMessage = WithWebSocketIdent ident
+
+              onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ do
+                  x <- atomically (readTChan outgoing)
+                  send (mkWsMessage x)
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (WithWebSocketIdent (them BS.ByteString)) (WithWebSocketIdent (me BS.ByteString))
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+                , onOpen
+                }
+          liftIO (async (webSocket app))
+
       peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
       liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketServer Public -> do
-      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+  | otherwise = do
       (incoming :: TChanRW 'Write (WebSocketIdent, them BS.ByteString))
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
-          process inputs outputs =
+          process inputs outputs = do
             let encodeAndSend :: me BS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
                 receiveAndDecode :: m (them BS.ByteString)
@@ -426,7 +369,8 @@ peerWebSocketByteString webSocketParams debug peer tests =
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
                   _ -> liftIO (defaultProgress t n)
-            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            liftIO (threadDelay 1000000)
 
       ( mainThread
         , outgoing :: TChanRW 'Read (WebSocketIdent, me BS.ByteString)
@@ -497,51 +441,11 @@ peerWebSocketJson :: forall m stM them me
                     ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
                   -> SymbioteT Json.Value m () -- ^ Tests registered
                   -> m ()
-peerWebSocketJson webSocketParams debug peer tests =
-  case webSocketParams of
-    WebSocketParams runWebSocket _ Private -> do
+peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug peer tests
+  | network == Private || (network == Public && clientOrServer == WebSocketClient) = do
       (outgoing :: TChan (me Json.Value)) <- liftIO newTChanIO
       (incoming :: TChan (them Json.Value)) <- liftIO newTChanIO
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
-          receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
-          onFailure = liftIO . defaultFailure
-          onProgress t n = case debug of
-            NoDebug -> nullProgress t n
-            _ -> liftIO (defaultProgress t n)
-
-          onOpen :: WebSocketsAppParams IO (me Json.Value) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (them Json.Value) (me Json.Value)
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ -> atomically . writeTChan incoming
-            , onOpen
-            }
-      let webSocket =
-            runWebSocket
-            . toClientAppTString
-            . ( case debug of
-                  FullDebug -> logStdout
-                  _ -> id
-              )
-            . dimapStringify
-            . dimapJson
-      wsThread <- liftIO (async (webSocket app))
-      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
-      liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketClient Public -> do
-      (outgoing :: TChan (me Json.Value)) <- liftIO newTChanIO
-      (incoming :: TChan (them Json.Value)) <- liftIO newTChanIO
-      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-
-      ident <- liftIO newWebSocketIdent
-      let mkWsMessage = WithWebSocketIdent ident
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
@@ -550,22 +454,8 @@ peerWebSocketJson webSocketParams debug peer tests =
           onProgress t n = case debug of
             NoDebug -> nullProgress t n
             _ -> liftIO (defaultProgress t n)
-
-          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
-            outgoingThread <- async $ forever $ do
-              x <- atomically (readTChan outgoing)
-              send (mkWsMessage x)
-            atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them Json.Value)) (WithWebSocketIdent (me Json.Value))
-          app = WebSocketsApp
-            { onClose = \_ _ -> do
-                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-                cancel outgoingThread
-            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
-            , onOpen
-            }
-      let webSocket =
+          webSocket :: forall a b. FromJSON a => ToJSON b => WebSocketsApp IO a b -> IO ()
+          webSocket =
             runWebSocket
             . toClientAppTString
             . ( case debug of
@@ -574,11 +464,46 @@ peerWebSocketJson webSocketParams debug peer tests =
               )
             . dimapStringify
             . dimapJson
-      wsThread <- liftIO (async (webSocket app))
+
+      wsThread <- case network of
+        Private -> do
+          let onOpen :: WebSocketsAppParams IO (me Json.Value) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (them Json.Value) (me Json.Value)
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ -> atomically . writeTChan incoming
+                , onOpen
+                }
+
+          liftIO (async (webSocket app))
+        Public -> do
+          ident <- liftIO newWebSocketIdent
+          let mkWsMessage = WithWebSocketIdent ident
+
+              onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
+              onOpen WebSocketsAppParams{close,send} = do
+                outgoingThread <- async $ forever $ do
+                  x <- atomically (readTChan outgoing)
+                  send (mkWsMessage x)
+                atomically (putTMVar outgoingThreadVar outgoingThread)
+              app :: WebSocketsApp IO (WithWebSocketIdent (them Json.Value)) (WithWebSocketIdent (me Json.Value))
+              app = WebSocketsApp
+                { onClose = \_ _ -> do
+                    outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                    cancel outgoingThread
+                , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+                , onOpen
+                }
+          liftIO (async (webSocket app))
+
       peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
       liftIO (cancel wsThread)
-    WebSocketParams runWebSocket WebSocketServer Public -> do
-      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+  | otherwise = do
       (incoming :: TChanRW 'Write (WebSocketIdent, them Json.Value))
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
@@ -636,6 +561,7 @@ peerWebSocketJson webSocketParams debug peer tests =
 data WebSocketServerOrClient
   = WebSocketServer
   | WebSocketClient
+  deriving (Eq)
 
 data WebSocketParams = WebSocketParams
   { runWebSocket            :: ClientAppT IO () -> IO () -- ^ Run the generated WebSocketsApp
