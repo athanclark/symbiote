@@ -20,17 +20,22 @@ import Data.Proxy
 import Control.Monad.IO.Class (liftIO)
 import Test.Serialization.Symbiote
   (SymbioteOperation (..), Generating, Operating, First, Second, Topic, SymbioteT, register)
-import Test.Serialization.Symbiote.Debug (Debug (..))
-import Test.Serialization.Symbiote.WebSocket (firstPeerWebSocketJson, firstPeerWebSocketByteString)
-import Test.Serialization.Symbiote.ZeroMQ (firstPeerZeroMQ, ZeroMQParams (..), ZeroMQServerOrClient (..))
+import Test.Serialization.Symbiote.Debug (Debug (..), Network (..))
+import Test.Serialization.Symbiote.WebSocket
+  ( firstPeerWebSocketJson, firstPeerWebSocketByteString
+  , secondPeerWebSocketJson, secondPeerWebSocketByteString
+  , WebSocketParams (..), WebSocketServerOrClient (..))
+import Test.Serialization.Symbiote.ZeroMQ
+  ( firstPeerZeroMQ, secondPeerZeroMQ, ZeroMQParams (..), ZeroMQServerOrClient (..))
 import Test.Serialization.Symbiote.Aeson ()
 import Test.Serialization.Symbiote.Cereal ()
 import Test.QuickCheck (Arbitrary (..))
 import Test.Tasty (TestTree, testGroup, askOption)
 import Test.Tasty.HUnit (testCase)
+import Network.WebSockets (runClient)
 import Network.WebSockets.Connection (defaultConnectionOptions)
 import Network.WebSockets.Simple (accept)
-import Network.WebSockets.Trans (runServerAppT)
+import Network.WebSockets.Trans (runServerAppT, runClientAppT, ClientAppT)
 import Network.Wai (responseLBS)
 import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Handler.Warp (run)
@@ -40,34 +45,74 @@ import Network.HTTP.Types (status400)
 
 protocolTests :: [TestTree]
 protocolTests =
-  [ askOption $ \serverOrClient -> case serverOrClient of
+  [ askOption $ \serverOrClient -> askOption $ \network -> case serverOrClient of
       Server -> testGroup "WebSocket Server"
         [ testCase "Json" $
-            let runClient client = do
-                  -- runServer "localhost" 3000 server'
-                  let server = accept client
-                  server' <- runServerAppT server
-                  liftIO $ run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
-                    respond $ responseLBS status400 [] "Not a websocket"
-            in  firstPeerWebSocketJson runClient NoDebug jsonTests
+            secondPeerWebSocketJson
+              WebSocketParams
+                { runWebSocket = \client -> do
+                    let server = accept client
+                    server' <- runServerAppT server
+                    run 3000 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
+                      respond $ responseLBS status400 [] "Not a websocket"
+                , webSocketServerOrClient = WebSocketServer
+                , webSocketNetwork = network
+                }
+              NoDebug jsonTests
         , testCase "ByteString" $
-            let runClient client = do
-                  -- runServer "localhost" 3000 server'
-                  let server = accept client
-                  server' <- runServerAppT server
-                  liftIO $ run 3001 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
-                    respond $ responseLBS status400 [] "Not a websocket"
-            in  firstPeerWebSocketByteString runClient NoDebug byteStringTests
-        ]
-      Client -> undefined
-  , askOption $ \serverOrClient -> case serverOrClient of
-      Server -> testGroup "ZeroMQ Server"
-        [ testCase "ByteString" $
-            firstPeerZeroMQ
-              ZeroMQParams{zmqHost = "tcp://*:3002", zmqServerOrClient = ZeroMQServer}
+            secondPeerWebSocketByteString
+              WebSocketParams
+                { runWebSocket = \client -> do
+                    let server = accept client
+                    server' <- runServerAppT server
+                    run 3001 $ logStdoutDev $ websocketsOr defaultConnectionOptions server' $ \_ respond ->
+                      respond $ responseLBS status400 [] "Not a websocket"
+                , webSocketServerOrClient = WebSocketServer
+                , webSocketNetwork = network
+                }
               NoDebug byteStringTests
         ]
-      Client -> undefined
+      Client -> testGroup "WebSocket Client"
+        [ testCase "Json" $
+            firstPeerWebSocketJson
+              WebSocketParams
+                { runWebSocket = \client -> do
+                    runClient "localhost" 3000 "/" client
+                , webSocketServerOrClient = WebSocketClient
+                , webSocketNetwork = network
+                }
+              NoDebug jsonTests
+        , testCase "ByteString" $
+            firstPeerWebSocketByteString
+              WebSocketParams
+                { runWebSocket = \client -> do
+                    runClient "localhost" 3001 "/" client
+                , webSocketServerOrClient = WebSocketClient
+                , webSocketNetwork = network
+                }
+              NoDebug byteStringTests
+        ]
+  , askOption $ \serverOrClient -> askOption $ \network -> case serverOrClient of
+      Server -> testGroup "ZeroMQ Server"
+        [ testCase "ByteString" $
+            secondPeerZeroMQ
+              ZeroMQParams
+                { zmqHost = "tcp://*:3002"
+                , zmqServerOrClient = ZeroMQServer
+                , zmqNetwork = network
+                }
+              NoDebug byteStringTests
+        ]
+      Client -> testGroup "ZeroMQ Client"
+        [ testCase "ByteString" $
+            firstPeerZeroMQ
+              ZeroMQParams
+                { zmqHost = "tcp://127.0.0.1:3002"
+                , zmqServerOrClient = ZeroMQClient
+                , zmqNetwork = network
+                }
+              NoDebug byteStringTests
+        ]
   ]
   where
     jsonTests :: SymbioteT Json.Value IO ()

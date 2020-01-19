@@ -12,3 +12,6 @@ module Test.Serialization.Symbiote.Debug where
 
 -- | Data type for deciding how verbose logging should be.
 data Debug = FullDebug | Percent | NoDebug
+
+-- | Data type determining if this is used on a public network or private one
+data Network = Public | Private

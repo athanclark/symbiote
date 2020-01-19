@@ -22,7 +22,7 @@ module Test.Serialization.Symbiote.ZeroMQ where
 
 import Test.Serialization.Symbiote
   (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, nullProgress, Topic, Failure)
-import Test.Serialization.Symbiote.Debug (Debug (..))
+import Test.Serialization.Symbiote.Debug (Debug (..), Network (..))
 
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as Cereal
@@ -38,7 +38,7 @@ import Control.Concurrent.Chan.Extra (readOnly, writeOnly)
 import Control.Concurrent.STM (TChan, TMVar, newTChanIO, writeTChan, readTChan, newEmptyTMVarIO, putTMVar, takeTMVar, atomically)
 import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
 import Control.Concurrent.Threaded.Hash (threaded)
-import System.ZMQ4 (Router (..), Dealer (..))
+import System.ZMQ4 (Router (..), Dealer (..), Pair (..))
 import System.ZMQ4.Monadic (runZMQ, async)
 import System.ZMQ4.Simple (ZMQIdent, socket, bind, send, receive, connect, setUUIDIdentity)
 
@@ -70,8 +70,9 @@ data ZeroMQServerOrClient
   | ZeroMQClient
 
 data ZeroMQParams = ZeroMQParams
-  { zmqHost :: String
+  { zmqHost           :: String
   , zmqServerOrClient :: ZeroMQServerOrClient
+  , zmqNetwork        :: Network
   }
 
 
@@ -95,9 +96,9 @@ peerZeroMQ :: forall m stM them me
               ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
            -> SymbioteT BS.ByteString m () -- ^ Tests registered
            -> m ()
-peerZeroMQ params debug peer tests = do
+peerZeroMQ params debug peer tests =
   case params of
-    ZeroMQParams host ZeroMQServer -> do
+    ZeroMQParams host ZeroMQServer Public -> do
       (incoming :: TChanRW 'Write (ZMQIdent, them BS.ByteString)) <- writeOnly <$> liftIO (atomically newTChanRW)
       -- the process that gets invoked for each new thread. Writes to a @me BS.ByteString@ and reads from a @them BS.ByteString@.
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
@@ -108,7 +109,7 @@ peerZeroMQ params debug peer tests = do
                 receiveAndDecode :: m (them BS.ByteString)
                 receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
 
-                onSuccess t = liftIO $ putStrLn $ "Topic finished: " ++ show t
+                onSuccess t = liftIO $ putStrLn $ "ZeroMQ Topic finished: " ++ show t
                 onFailure = liftIO . defaultFailure
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
@@ -139,10 +140,55 @@ peerZeroMQ params debug peer tests = do
             Nothing -> liftIO $ putStrLn "got nothin"
             Just (ident,x :| _) -> case Cereal.decode x of
               Left e -> error $ "couldn't decode: " ++ e
-              Right x' -> liftIO (atomically (writeTChanRW incoming (ident,x')))
+              Right x' -> do
+                liftIO (atomically (writeTChanRW incoming (ident,x')))
       -- liftIO (cancel zThread) - never dies automatically?
 
-    ZeroMQParams host ZeroMQClient -> do
+    ZeroMQParams host ZeroMQServer Private -> do
+      (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+      -- thread that connects and communicates with ZeroMQ
+      zThread <- runZMQ $ async $ do
+        s <- socket Pair Pair
+        bind s host
+
+        -- sending loop (separate thread)
+        outgoingThread <- async $ forever $ do
+          x <- liftIO (atomically (readTChan outgoing))
+          send () s ((Cereal.encode x) :| [])
+        liftIO (atomically (putTMVar outgoingThreadVar outgoingThread))
+        -- FIXME kill this thread on ZeroMQ death - a 'la Async.link & bind?
+
+        -- receiving loop (current thread)
+        forever $ do
+          mX <- receive s
+          case mX of
+            Nothing -> liftIO (putStrLn "got nothin")
+            Just ((),x :| _) -> case Cereal.decode x of
+              Left e -> error ("couldn't decode: " ++ e)
+              Right x' -> do
+                liftIO (atomically (writeTChan incoming x'))
+
+      -- main loop (current thread, continues when finished)
+      let encodeAndSend :: me BS.ByteString -> m ()
+          encodeAndSend x = liftIO (atomically (writeTChan outgoing x))
+
+          receiveAndDecode :: m (them BS.ByteString)
+          receiveAndDecode = liftIO (atomically (readTChan incoming))
+
+          onSuccess t = liftIO $ putStrLn $ "ZeroMQ Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+
+      -- kill ZeroMQ thread
+      liftIO (cancel zThread)
+
+    ZeroMQParams host ZeroMQClient Public -> do
       (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
       (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
@@ -167,7 +213,8 @@ peerZeroMQ params debug peer tests = do
             Nothing -> liftIO (putStrLn "got nothin")
             Just ((),x :| _) -> case Cereal.decode x of
               Left e -> error ("couldn't decode: " ++ e)
-              Right x' -> liftIO (atomically (writeTChan incoming x'))
+              Right x' -> do
+                liftIO (atomically (writeTChan incoming x'))
 
       -- main loop (current thread, continues when finished)
       let encodeAndSend :: me BS.ByteString -> m ()
@@ -176,7 +223,51 @@ peerZeroMQ params debug peer tests = do
           receiveAndDecode :: m (them BS.ByteString)
           receiveAndDecode = liftIO (atomically (readTChan incoming))
 
-          onSuccess t = liftIO $ putStrLn $ "Topic finished: " ++ show t
+          onSuccess t = liftIO $ putStrLn $ "ZeroMQ Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+
+      -- kill ZeroMQ thread
+      liftIO (cancel zThread)
+
+    ZeroMQParams host ZeroMQClient Private -> do
+      (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+      -- thread that connects and communicates with ZeroMQ
+      zThread <- runZMQ $ async $ do
+        s <- socket Pair Pair
+        connect s host
+
+        -- sending loop (separate thread)
+        outgoingThread <- async $ forever $ do
+          x <- liftIO (atomically (readTChan outgoing))
+          send () s ((Cereal.encode x) :| [])
+        liftIO (atomically (putTMVar outgoingThreadVar outgoingThread))
+        -- FIXME kill this thread on ZeroMQ death - a 'la Async.link & bind?
+
+        -- receiving loop (current thread)
+        forever $ do
+          mX <- receive s
+          case mX of
+            Nothing -> liftIO (putStrLn "got nothin")
+            Just ((),x :| _) -> case Cereal.decode x of
+              Left e -> error ("couldn't decode: " ++ e)
+              Right x' -> do
+                liftIO (atomically (writeTChan incoming x'))
+
+      -- main loop (current thread, continues when finished)
+      let encodeAndSend :: me BS.ByteString -> m ()
+          encodeAndSend x = liftIO (atomically (writeTChan outgoing x))
+
+          receiveAndDecode :: m (them BS.ByteString)
+          receiveAndDecode = liftIO (atomically (readTChan incoming))
+
+          onSuccess t = liftIO $ putStrLn $ "ZeroMQ Topic finished: " ++ show t
           onFailure = liftIO . defaultFailure
           onProgress t n = case debug of
             NoDebug -> nullProgress t n

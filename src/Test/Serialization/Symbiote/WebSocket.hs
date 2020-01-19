@@ -1,5 +1,6 @@
 {-# LANGUAGE
-    RankNTypes
+    DataKinds
+  , RankNTypes
   , NamedFieldPuns
   , FlexibleContexts
   , ScopedTypeVariables
@@ -22,9 +23,11 @@ module Test.Serialization.Symbiote.WebSocket where
 
 import Test.Serialization.Symbiote
   (firstPeer, secondPeer, SymbioteT, defaultFailure, defaultProgress, nullProgress, Topic, Failure)
-import Test.Serialization.Symbiote.Debug (Debug (..))
+import Test.Serialization.Symbiote.Debug (Debug (..), Network (..))
+import Test.Serialization.Symbiote.WebSocket.Ident (newWebSocketIdent, WithWebSocketIdent (..), WebSocketIdent)
 
-import Data.Aeson (ToJSON, FromJSON, Value)
+import Data.Aeson (ToJSON, FromJSON)
+import qualified Data.Aeson as Json
 import Data.Serialize (Serialize)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -37,7 +40,11 @@ import Control.Monad.Catch (MonadCatch)
 import Control.Concurrent.STM
   ( TChan, TMVar, newTChanIO, readTChan, writeTChan, atomically
   , newEmptyTMVarIO, putTMVar, takeTMVar)
+import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
 import Control.Concurrent.Async (async, cancel, wait, Async)
+import Control.Concurrent.Chan.Scope (Scope (Read, Write))
+import Control.Concurrent.Chan.Extra (readOnly, writeOnly)
+import Control.Concurrent.Threaded.Hash (threaded)
 import Network.WebSockets.Simple
   (WebSocketsApp (..), WebSocketsAppParams (..), toClientAppTString, toClientAppTBinary, dimap', dimapJson, dimapStringify)
 import Network.WebSockets.Simple.Logger (logStdout)
@@ -48,61 +55,61 @@ secondPeerWebSocketLazyByteString :: MonadIO m
                                   => MonadBaseControl IO m stM
                                   => MonadCatch m
                                   => Extractable stM
-                                  => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                                  => WebSocketParams
                                   -> Debug
                                   -> SymbioteT LBS.ByteString m () -- ^ Tests registered
                                   -> m ()
-secondPeerWebSocketLazyByteString host debug = peerWebSocketLazyByteString host debug secondPeer
+secondPeerWebSocketLazyByteString params debug = peerWebSocketLazyByteString params debug secondPeer
 
 firstPeerWebSocketLazyByteString :: MonadIO m
                                  => MonadBaseControl IO m stM
                                  => MonadCatch m
                                  => Extractable stM
-                                 => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                                 => WebSocketParams
                                  -> Debug
                                  -> SymbioteT LBS.ByteString m () -- ^ Tests registered
                                  -> m ()
-firstPeerWebSocketLazyByteString host debug = peerWebSocketLazyByteString host debug firstPeer
+firstPeerWebSocketLazyByteString params debug = peerWebSocketLazyByteString params debug firstPeer
 
 secondPeerWebSocketByteString :: MonadIO m
                               => MonadBaseControl IO m stM
                               => MonadCatch m
                               => Extractable stM
-                              => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                              => WebSocketParams
                               -> Debug
                               -> SymbioteT BS.ByteString m () -- ^ Tests registered
                               -> m ()
-secondPeerWebSocketByteString host debug = peerWebSocketByteString host debug secondPeer
+secondPeerWebSocketByteString params debug = peerWebSocketByteString params debug secondPeer
 
 firstPeerWebSocketByteString :: MonadIO m
                              => MonadBaseControl IO m stM
                              => MonadCatch m
                              => Extractable stM
-                             => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                             => WebSocketParams
                              -> Debug
                              -> SymbioteT BS.ByteString m () -- ^ Tests registered
                              -> m ()
-firstPeerWebSocketByteString host debug = peerWebSocketByteString host debug firstPeer
+firstPeerWebSocketByteString params debug = peerWebSocketByteString params debug firstPeer
 
 secondPeerWebSocketJson :: MonadIO m
                         => MonadBaseControl IO m stM
                         => MonadCatch m
                         => Extractable stM
-                        => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                        => WebSocketParams
                         -> Debug
-                        -> SymbioteT Value m () -- ^ Tests registered
+                        -> SymbioteT Json.Value m () -- ^ Tests registered
                         -> m ()
-secondPeerWebSocketJson host debug = peerWebSocketJson host debug secondPeer
+secondPeerWebSocketJson params debug = peerWebSocketJson params debug secondPeer
 
 firstPeerWebSocketJson :: MonadIO m
                        => MonadBaseControl IO m stM
                        => MonadCatch m
                        => Extractable stM
-                       => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                       => WebSocketParams
                        -> Debug
-                       -> SymbioteT Value m () -- ^ Tests registered
+                       -> SymbioteT Json.Value m () -- ^ Tests registered
                        -> m ()
-firstPeerWebSocketJson host debug = peerWebSocketJson host debug firstPeer
+firstPeerWebSocketJson params debug = peerWebSocketJson params debug firstPeer
 
 peerWebSocketLazyByteString :: forall m stM them me
                              . MonadIO m
@@ -112,7 +119,7 @@ peerWebSocketLazyByteString :: forall m stM them me
                             => Show (them LBS.ByteString)
                             => Serialize (me LBS.ByteString)
                             => Serialize (them LBS.ByteString)
-                            => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                            => WebSocketParams
                             -> Debug
                             -> ( (me LBS.ByteString -> m ())
                               -> m (them LBS.ByteString)
@@ -124,24 +131,157 @@ peerWebSocketLazyByteString :: forall m stM them me
                               )
                             -> SymbioteT LBS.ByteString m () -- ^ Tests registered
                             -> m ()
-peerWebSocketLazyByteString runClientAppT debug = peerWebSocket go debug
-  where
-    go :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString) -> IO ()
-    go app =
-      runClientAppT $ toClientAppTBinary $
-        ( case debug of
-            FullDebug -> logStdout
-            _ -> id
-        ) $ dimap' receive Cereal.encodeLazy app
-      where
-        receive :: LBS.ByteString -> IO (them LBS.ByteString)
-        receive buf = do
-          let eX = Cereal.decodeLazy buf
-          case eX of
-            Left e -> do
-              putStrLn $ "Can't parse buffer: " ++ show buf
-              error e
-            Right x -> pure x
+peerWebSocketLazyByteString webSocketParams debug peer tests =
+  case webSocketParams of
+    WebSocketParams runWebSocket _ Private -> do
+      (outgoing :: TChan (me LBS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them LBS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+
+          onOpen :: WebSocketsAppParams IO (me LBS.ByteString) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString)
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ -> atomically . writeTChan incoming
+            , onOpen
+            }
+      let webSocket app =
+            runWebSocket $ toClientAppTBinary $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encodeLazy app
+            where
+              receive :: LBS.ByteString -> IO (them LBS.ByteString)
+              receive buf = do
+                let eX = Cereal.decodeLazy buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketClient Public -> do
+      (outgoing :: TChan (me LBS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them LBS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+      ident <- liftIO newWebSocketIdent
+      let mkWsMessage = WithWebSocketIdent ident
+
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+
+          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              x <- atomically (readTChan outgoing)
+              send (mkWsMessage x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them LBS.ByteString)) (WithWebSocketIdent (me LBS.ByteString))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+            , onOpen
+            }
+      let webSocket app =
+            runWebSocket $ toClientAppTBinary $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encodeLazy app
+            where
+              receive :: LBS.ByteString -> IO (WithWebSocketIdent (them LBS.ByteString))
+              receive buf = do
+                let eX = Cereal.decodeLazy buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketServer Public -> do
+      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+      (incoming :: TChanRW 'Write (WebSocketIdent, them LBS.ByteString))
+        <- writeOnly <$> liftIO (atomically newTChanRW)
+
+      let process :: TChanRW 'Read (them LBS.ByteString) -> TChanRW 'Write (me LBS.ByteString) -> m ()
+          process inputs outputs =
+            let encodeAndSend :: me LBS.ByteString -> m ()
+                encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
+                receiveAndDecode :: m (them LBS.ByteString)
+                receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
+
+                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onFailure = liftIO . defaultFailure
+                onProgress t n = case debug of
+                  NoDebug -> nullProgress t n
+                  _ -> liftIO (defaultProgress t n)
+            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+
+      ( mainThread
+        , outgoing :: TChanRW 'Read (WebSocketIdent, me LBS.ByteString)
+        ) <- threaded incoming process
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+
+      let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              (ident, x) <- atomically (readTChanRW outgoing)
+              send (WithWebSocketIdent ident x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them LBS.ByteString)) (WithWebSocketIdent (me LBS.ByteString))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
+            , onOpen
+            }
+      let webSocket :: WebSocketsApp IO
+                         (WithWebSocketIdent (them LBS.ByteString))
+                         (WithWebSocketIdent (me LBS.ByteString))
+                    -> IO ()
+          webSocket app =
+            runWebSocket $ toClientAppTBinary $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encodeLazy app
+            where
+              receive :: LBS.ByteString -> IO (WithWebSocketIdent (them LBS.ByteString))
+              receive buf = do
+                let eX = Cereal.decodeLazy buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+      liftIO (webSocket app)
 
 peerWebSocketByteString :: forall m stM them me
                          . MonadIO m
@@ -151,7 +291,7 @@ peerWebSocketByteString :: forall m stM them me
                         => Show (them BS.ByteString)
                         => Serialize (me BS.ByteString)
                         => Serialize (them BS.ByteString)
-                        => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                        => WebSocketParams
                         -> Debug
                         -> ( (me BS.ByteString -> m ())
                           -> m (them BS.ByteString)
@@ -160,110 +300,345 @@ peerWebSocketByteString :: forall m stM them me
                           -> (Topic -> Float -> m ())
                           -> SymbioteT BS.ByteString m ()
                           -> m ()
-                          )
+                          ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
                         -> SymbioteT BS.ByteString m () -- ^ Tests registered
                         -> m ()
-peerWebSocketByteString runClientAppT debug = peerWebSocket go debug
-  where
-    go :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString) -> IO ()
-    go app =
-      runClientAppT $ toClientAppTBinary $ toLazy $
-        ( case debug of
-            FullDebug -> logStdout
-            _ -> id
-        ) $ dimap' receive Cereal.encode app
-      where
-        receive :: BS.ByteString -> IO (them BS.ByteString)
-        receive buf = do
-          let eX = Cereal.decode buf
-          case eX of
-            Left e -> do
-              putStrLn $ "Can't parse buffer: " ++ show buf
-              error e
-            Right x -> pure x
+peerWebSocketByteString webSocketParams debug peer tests =
+  case webSocketParams of
+    WebSocketParams runWebSocket _ Private -> do
+      (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
 
-        toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString -> WebSocketsApp IO LBS.ByteString LBS.ByteString
-        toLazy = dimap' r s
-          where
-            r = pure . LBS.toStrict
-            s = LBS.fromStrict
+          onOpen :: WebSocketsAppParams IO (me BS.ByteString) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString)
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ -> atomically . writeTChan incoming
+            , onOpen
+            }
+      let webSocket app =
+            runWebSocket $ toClientAppTBinary $ toLazy $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encode app
+            where
+              receive :: BS.ByteString -> IO (them BS.ByteString)
+              receive buf = do
+                let eX = Cereal.decode buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+
+              toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString
+                     -> WebSocketsApp IO LBS.ByteString LBS.ByteString
+              toLazy = dimap' r s
+                where
+                  r = pure . LBS.toStrict
+                  s = LBS.fromStrict
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketClient Public -> do
+      (outgoing :: TChan (me BS.ByteString)) <- liftIO newTChanIO
+      (incoming :: TChan (them BS.ByteString)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+      ident <- liftIO newWebSocketIdent
+      let mkWsMessage = WithWebSocketIdent ident
+
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+
+          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              x <- atomically (readTChan outgoing)
+              send (mkWsMessage x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them BS.ByteString)) (WithWebSocketIdent (me BS.ByteString))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+            , onOpen
+            }
+      let webSocket app =
+            runWebSocket $ toClientAppTBinary $ toLazy $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encode app
+            where
+              receive :: BS.ByteString -> IO (WithWebSocketIdent (them BS.ByteString))
+              receive buf = do
+                let eX = Cereal.decode buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+
+              toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString
+                     -> WebSocketsApp IO LBS.ByteString LBS.ByteString
+              toLazy = dimap' r s
+                where
+                  r = pure . LBS.toStrict
+                  s = LBS.fromStrict
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketServer Public -> do
+      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+      (incoming :: TChanRW 'Write (WebSocketIdent, them BS.ByteString))
+        <- writeOnly <$> liftIO (atomically newTChanRW)
+
+      let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
+          process inputs outputs =
+            let encodeAndSend :: me BS.ByteString -> m ()
+                encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
+                receiveAndDecode :: m (them BS.ByteString)
+                receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
+
+                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onFailure = liftIO . defaultFailure
+                onProgress t n = case debug of
+                  NoDebug -> nullProgress t n
+                  _ -> liftIO (defaultProgress t n)
+            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+
+      ( mainThread
+        , outgoing :: TChanRW 'Read (WebSocketIdent, me BS.ByteString)
+        ) <- threaded incoming process
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
 
 
-peerWebSocketJson :: MonadIO m
+      let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              (ident, x) <- atomically (readTChanRW outgoing)
+              send (WithWebSocketIdent ident x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them BS.ByteString)) (WithWebSocketIdent (me BS.ByteString))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
+            , onOpen
+            }
+      let webSocket :: WebSocketsApp IO
+                         (WithWebSocketIdent (them BS.ByteString))
+                         (WithWebSocketIdent (me BS.ByteString))
+                    -> IO ()
+          webSocket app =
+            runWebSocket $ toClientAppTBinary $ toLazy $
+              ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              ) $ dimap' receive Cereal.encode app
+            where
+              receive :: BS.ByteString -> IO (WithWebSocketIdent (them BS.ByteString))
+              receive buf = do
+                let eX = Cereal.decode buf
+                case eX of
+                  Left e -> do
+                    putStrLn ("Can't parse buffer: " ++ show buf)
+                    error e
+                  Right x -> pure x
+
+              toLazy :: WebSocketsApp IO BS.ByteString BS.ByteString
+                     -> WebSocketsApp IO LBS.ByteString LBS.ByteString
+              toLazy = dimap' r s
+                where
+                  r = pure . LBS.toStrict
+                  s = LBS.fromStrict
+      liftIO (webSocket app)
+
+
+-- WebSockets can work with both Json 'Value's and 'BS.ByteString's
+peerWebSocketJson :: forall m stM them me
+                   . MonadIO m
                   => MonadBaseControl IO m stM
                   => Extractable stM
-                  => MonadCatch m
-                  => Show (them Value)
-                  => ToJSON (me Value)
-                  => FromJSON (them Value)
-                  => (ClientAppT IO () -> IO ()) -- ^ Run the generated WebSocket client
+                  => Show (them Json.Value)
+                  => ToJSON (me Json.Value)
+                  => FromJSON (them Json.Value)
+                  => WebSocketParams
                   -> Debug
-                  -> ( (me Value -> m ())
-                    -> m (them Value)
+                  -> ( (me Json.Value -> m ())
+                    -> m (them Json.Value)
                     -> (Topic -> m ())
-                    -> (Failure them Value -> m ())
+                    -> (Failure them Json.Value -> m ())
                     -> (Topic -> Float -> m ())
-                    -> SymbioteT Value m ()
+                    -> SymbioteT Json.Value m ()
                     -> m ()
-                    )
-                  -> SymbioteT Value m () -- ^ Tests registered
+                    ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
+                  -> SymbioteT Json.Value m () -- ^ Tests registered
                   -> m ()
-peerWebSocketJson runClientAppT debug = peerWebSocket
-  ( runClientAppT
-    . toClientAppTString
-    . ( case debug of
-          FullDebug -> logStdout
-          _ -> id
-      )
-    . dimapStringify
-    . dimapJson
-  )
-  debug
+peerWebSocketJson webSocketParams debug peer tests =
+  case webSocketParams of
+    WebSocketParams runWebSocket _ Private -> do
+      (outgoing :: TChan (me Json.Value)) <- liftIO newTChanIO
+      (incoming :: TChan (them Json.Value)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
 
--- | WebSockets can work with both Json 'Value's and 'BS.ByteString's
-peerWebSocket :: forall m stM s them me
-               . MonadIO m
-              => MonadBaseControl IO m stM
-              => Show (them s)
-              => Show s
-              => ( WebSocketsApp IO (them s) (me s)
-                -> IO ()
-                 ) -- ^ Run the generated WebSocketsApp
-              -> Debug
-              -> ( (me s -> m ())
-                -> m (them s)
-                -> (Topic -> m ())
-                -> (Failure them s -> m ())
-                -> (Topic -> Float -> m ())
-                -> SymbioteT s m ()
-                -> m ()
-                 ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
-              -> SymbioteT s m () -- ^ Tests registered
-              -> m ()
-peerWebSocket webSocket debug peer tests = do
-  (outgoing :: TChan (me s)) <- liftIO newTChanIO
-  (incoming :: TChan (them s)) <- liftIO newTChanIO
-  (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
-  let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
-      receiveAndDecode = liftIO $ atomically $ readTChan incoming
-      onSuccess t = liftIO $ putStrLn $ "Topic finished: " ++ show t
-      onFailure = liftIO . defaultFailure
-      onProgress t n = case debug of
-        NoDebug -> nullProgress t n
-        _ -> liftIO (defaultProgress t n)
+          onOpen :: WebSocketsAppParams IO (me Json.Value) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (them Json.Value) (me Json.Value)
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ -> atomically . writeTChan incoming
+            , onOpen
+            }
+      let webSocket =
+            runWebSocket
+            . toClientAppTString
+            . ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              )
+            . dimapStringify
+            . dimapJson
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketClient Public -> do
+      (outgoing :: TChan (me Json.Value)) <- liftIO newTChanIO
+      (incoming :: TChan (them Json.Value)) <- liftIO newTChanIO
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
 
-      onOpen :: WebSocketsAppParams IO (me s) -> IO ()
-      onOpen WebSocketsAppParams{close,send} = do
-        outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
-        atomically (putTMVar outgoingThreadVar outgoingThread)
-      app :: WebSocketsApp IO (them s) (me s)
-      app = WebSocketsApp
-        { onClose = \_ _ -> do
-            outgoingThread <- atomically (takeTMVar outgoingThreadVar)
-            cancel outgoingThread
-        , onReceive = \_ -> atomically . writeTChan incoming
-        , onOpen
-        }
-  wsThread <- liftIO (async (webSocket app))
-  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
-  liftIO (cancel wsThread)
+      ident <- liftIO newWebSocketIdent
+      let mkWsMessage = WithWebSocketIdent ident
+
+      let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
+          receiveAndDecode = liftIO $ atomically $ readTChan incoming
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onFailure = liftIO . defaultFailure
+          onProgress t n = case debug of
+            NoDebug -> nullProgress t n
+            _ -> liftIO (defaultProgress t n)
+
+          onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              x <- atomically (readTChan outgoing)
+              send (mkWsMessage x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them Json.Value)) (WithWebSocketIdent (me Json.Value))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent _ x) -> atomically (writeTChan incoming x)
+            , onOpen
+            }
+      let webSocket =
+            runWebSocket
+            . toClientAppTString
+            . ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              )
+            . dimapStringify
+            . dimapJson
+      wsThread <- liftIO (async (webSocket app))
+      peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+      liftIO (cancel wsThread)
+    WebSocketParams runWebSocket WebSocketServer Public -> do
+      -- (outgoing :: TChan (me s)) <- liftIO newTChanIO
+      (incoming :: TChanRW 'Write (WebSocketIdent, them Json.Value))
+        <- writeOnly <$> liftIO (atomically newTChanRW)
+
+      let process :: TChanRW 'Read (them Json.Value) -> TChanRW 'Write (me Json.Value) -> m ()
+          process inputs outputs =
+            let encodeAndSend :: me Json.Value -> m ()
+                encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
+                receiveAndDecode :: m (them Json.Value)
+                receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
+
+                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onFailure = liftIO . defaultFailure
+                onProgress t n = case debug of
+                  NoDebug -> nullProgress t n
+                  _ -> liftIO (defaultProgress t n)
+            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+
+      ( mainThread
+        , outgoing :: TChanRW 'Read (WebSocketIdent, me Json.Value)
+        ) <- threaded incoming process
+      (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
+
+
+      let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
+          onOpen WebSocketsAppParams{close,send} = do
+            outgoingThread <- async $ forever $ do
+              (ident, x) <- atomically (readTChanRW outgoing)
+              send (WithWebSocketIdent ident x)
+            atomically (putTMVar outgoingThreadVar outgoingThread)
+          app :: WebSocketsApp IO (WithWebSocketIdent (them Json.Value)) (WithWebSocketIdent (me Json.Value))
+          app = WebSocketsApp
+            { onClose = \_ _ -> do
+                outgoingThread <- atomically (takeTMVar outgoingThreadVar)
+                cancel outgoingThread
+            , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
+            , onOpen
+            }
+      let webSocket :: WebSocketsApp IO
+                         (WithWebSocketIdent (them Json.Value))
+                         (WithWebSocketIdent (me Json.Value))
+                    -> IO ()
+          webSocket =
+            runWebSocket
+            . toClientAppTString
+            . ( case debug of
+                  FullDebug -> logStdout
+                  _ -> id
+              )
+            . dimapStringify
+            . dimapJson
+      liftIO (webSocket app)
+
+
+
+data WebSocketServerOrClient
+  = WebSocketServer
+  | WebSocketClient
+
+data WebSocketParams = WebSocketParams
+  { runWebSocket            :: ClientAppT IO () -> IO () -- ^ Run the generated WebSocketsApp
+  , webSocketServerOrClient :: WebSocketServerOrClient
+  , webSocketNetwork        :: Network
+  }

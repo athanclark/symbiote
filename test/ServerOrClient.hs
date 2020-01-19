@@ -5,6 +5,7 @@
 module ServerOrClient where
 
 import Test.Tasty.Options (safeReadBool, flagCLParser, IsOption (..))
+import Test.Serialization.Symbiote.Debug (Network (..))
 import Data.Bool (bool)
 
 
@@ -16,3 +17,11 @@ instance IsOption ServerOrClient where
   optionName = "is-client"
   optionHelp = "Set to 'true' when you want the test suite to behave as a client"
   optionCLParser = flagCLParser (Just 'c') Client
+
+
+instance IsOption Network where
+  defaultValue = Private
+  parseValue s = (bool Private Public) <$> safeReadBool s
+  optionName = "is-public"
+  optionHelp = "Set to 'true' when you want the test suite to behave on a public channel"
+  optionCLParser = flagCLParser (Just 'p') Public

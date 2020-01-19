@@ -11,6 +11,7 @@ import Test.Tasty.QuickCheck (testProperty)
 import Test.QuickCheck.Instances ()
 import Test.Serialization.Symbiote (First, Second, Generating, Operating, Topic)
 import Test.Serialization.Symbiote.Abides
+import Test.Serialization.Symbiote.WebSocket.Ident (WebSocketIdent, WithWebSocketIdent)
 
 
 localIsos :: TestTree
@@ -37,6 +38,8 @@ localIsos =
             , go ("First Int", Proxy :: Proxy (First Int))
             , go ("Second Int", Proxy :: Proxy (Second Int))
             , go ("Topic", Proxy :: Proxy Topic)
+            , go ("WebSocketIdent", Proxy :: Proxy WebSocketIdent)
+            , go ("WithWebSocketIdent", Proxy :: Proxy (WithWebSocketIdent Int))
             ]
           ]
     , testGroup "Cereal" $
@@ -60,6 +63,8 @@ localIsos =
             , go ("First ByteString", Proxy :: Proxy (First ByteString))
             , go ("Second ByteString", Proxy :: Proxy (Second ByteString))
             , go ("Topic", Proxy :: Proxy Topic)
+            , go ("WebSocketIdent", Proxy :: Proxy WebSocketIdent)
+            , go ("WithWebSocketIdent", Proxy :: Proxy (WithWebSocketIdent Int))
             ]
           ]
     ]

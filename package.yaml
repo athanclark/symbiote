@@ -30,6 +30,7 @@ dependencies:
 - containers
 - exceptions
 - extractable-singleton
+- hashable
 - monad-control-aligned
 - mtl
 - stm
@@ -37,6 +38,7 @@ dependencies:
 - threaded
 - QuickCheck
 - quickcheck-instances
+- uuid
 - websockets-simple >= 0.2.0
 - websockets-simple-extra
 - wai-transformers >= 0.1.0
