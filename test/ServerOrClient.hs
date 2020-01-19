@@ -24,4 +24,3 @@ instance IsOption Network where
   parseValue s = (bool Private Public) <$> safeReadBool s
   optionName = "is-public"
   optionHelp = "Set to 'true' when you want the test suite to behave on a public channel"
-  optionCLParser = flagCLParser (Just 'p') Public
