@@ -50,6 +50,7 @@ import Network.WebSockets.Simple
   (WebSocketsApp (..), WebSocketsAppParams (..), toClientAppTString, toClientAppTBinary, dimap', dimapJson, dimapStringify)
 import Network.WebSockets.Simple.Logger (logStdout)
 import Network.WebSockets.Trans (ClientAppT)
+import System.Timeout (timeout)
 
 
 secondPeerWebSocketLazyByteString :: MonadIO m
@@ -204,7 +205,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
       let process :: TChanRW 'Read (them LBS.ByteString) -> TChanRW 'Write (me LBS.ByteString) -> m ()
-          process inputs outputs = do
+          process inputs outputs = void $ liftBaseWith $ \runInBase -> timeout 10000000 $ runInBase $ do
             let encodeAndSend :: me LBS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
                 receiveAndDecode :: m (them LBS.ByteString)
@@ -358,7 +359,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
-          process inputs outputs = do
+          process inputs outputs = void $ liftBaseWith $ \runInBase -> timeout 10000000 $ runInBase $ do
             let encodeAndSend :: me BS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
                 receiveAndDecode :: m (them BS.ByteString)
@@ -508,7 +509,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
         <- writeOnly <$> liftIO (atomically newTChanRW)
 
       let process :: TChanRW 'Read (them Json.Value) -> TChanRW 'Write (me Json.Value) -> m ()
-          process inputs outputs =
+          process inputs outputs = void $ liftBaseWith $ \runInBase -> timeout 10000000 $ runInBase $ do
             let encodeAndSend :: me Json.Value -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
                 receiveAndDecode :: m (them Json.Value)
@@ -519,7 +520,8 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
                   _ -> liftIO (defaultProgress t n)
-            in  peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
+            liftIO (threadDelay 1000000)
 
       ( mainThread
         , outgoing :: TChanRW 'Read (WebSocketIdent, me Json.Value)

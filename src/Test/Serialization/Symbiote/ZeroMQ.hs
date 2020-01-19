@@ -30,7 +30,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Singleton.Class (Extractable)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Trans.Control.Aligned (MonadBaseControl)
+import Control.Monad.Trans.Control.Aligned (MonadBaseControl, liftBaseWith)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (cancel)
 import Control.Concurrent.Chan.Scope (Scope (Read, Write))
@@ -41,6 +41,7 @@ import Control.Concurrent.Threaded.Hash (threaded)
 import System.ZMQ4 (Router (..), Dealer (..), Pair (..))
 import System.ZMQ4.Monadic (runZMQ, async)
 import System.ZMQ4.Simple (ZMQIdent, socket, bind, send, receive, connect, setUUIDIdentity)
+import System.Timeout (timeout)
 
 
 
@@ -100,7 +101,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
       (incoming :: TChanRW 'Write (ZMQIdent, them BS.ByteString)) <- writeOnly <$> liftIO (atomically newTChanRW)
       -- the process that gets invoked for each new thread. Writes to a @me BS.ByteString@ and reads from a @them BS.ByteString@.
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
-          process inputs outputs = do
+          process inputs outputs = void $ liftBaseWith $ \runInBase -> timeout 10000000 $ runInBase $ do
             let encodeAndSend :: me BS.ByteString -> m ()
                 encodeAndSend x = liftIO $ atomically $ writeTChanRW outputs x
 
