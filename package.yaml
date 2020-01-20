@@ -4,7 +4,7 @@ github:              "athanclark/symbiote"
 license:             BSD3
 author:              "Athan Clark"
 maintainer:          "athan.clark@gmail.com"
-copyright:           "2019 Athan Clark"
+copyright:           "2019, 2020 Athan Clark"
 
 extra-source-files:
 - README.md
@@ -75,3 +75,15 @@ tests:
     - warp
     - websockets
     - websockets-simple
+
+executables:
+  symbiote-server:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - symbiote
+    - optparse-applicative

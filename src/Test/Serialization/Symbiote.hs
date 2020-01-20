@@ -109,8 +109,8 @@ import Data.Proxy (Proxy (..))
 import Data.Aeson (ToJSON (..), FromJSON (..), (.=), object, (.:), Value (Object, String))
 import Data.Aeson.Types (typeMismatch)
 import Data.Serialize (Serialize (..))
-import Data.Serialize.Put (putWord8, putInt32be, putByteString, putLazyByteString)
-import Data.Serialize.Get (getWord8, getInt32be, getByteString, getLazyByteString)
+import Data.Serialize.Put (putWord8, putInt32be, putByteString, putLazyByteString, PutM)
+import Data.Serialize.Get (getWord8, getInt32be, getByteString, getLazyByteString, Get)
 import Text.Printf (printf)
 import Control.Concurrent.STM
   (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
@@ -337,25 +337,33 @@ data First s
 instance Arbitrary s => Arbitrary (First s) where
   arbitrary = oneof
     [ AvailableTopics <$> arbitrary
+    , pure BadStartSubset
     , FirstGenerating <$> arbitrary <*> arbitrary
     , FirstOperating <$> arbitrary <*> arbitrary
     ]
 instance ToJSON s => ToJSON (First s) where
   toJSON x = case x of
     AvailableTopics ts -> object ["availableTopics" .= ts]
+    BadStartSubset -> String "badStartSubset"
     FirstGenerating t y -> object ["firstGenerating" .= object ["topic" .= t, "generating" .= y]]
     FirstOperating t y -> object ["firstOperating" .= object ["topic" .= t, "operating" .= y]]
 instance FromJSON s => FromJSON (First s) where
-  parseJSON (Object o) = availableTopics <|> firstGenerating' <|> firstOperating'
+  parseJSON json = case json of
+    Object o ->
+      let availableTopics = AvailableTopics <$> o .: "availableTopics"
+          firstGenerating' = do
+            o' <- o .: "firstGenerating"
+            FirstGenerating <$> o' .: "topic" <*> o' .: "generating"
+          firstOperating' = do
+            o' <- o .: "firstOperating"
+            FirstOperating <$> o' .: "topic" <*> o' .: "operating"
+      in  availableTopics <|> firstGenerating' <|> firstOperating'
+    String s
+      | s == "badStartSubset" -> pure BadStartSubset
+      | otherwise -> fail'
+    _ -> fail'
     where
-      availableTopics = AvailableTopics <$> o .: "availableTopics"
-      firstGenerating' = do
-        o' <- o .: "firstGenerating"
-        FirstGenerating <$> o' .: "topic" <*> o' .: "generating"
-      firstOperating' = do
-        o' <- o .: "firstOperating"
-        FirstOperating <$> o' .: "topic" <*> o' .: "operating"
-  parseJSON x = typeMismatch "First s" x
+      fail' = typeMismatch "First s" json
 instance Serialize (First BS.ByteString) where
   put x = case x of
     AvailableTopics ts -> do
@@ -363,17 +371,19 @@ instance Serialize (First BS.ByteString) where
       let ls = Map.toList ts
       putInt32be (fromIntegral (length ls))
       void (traverse put ls)
-    FirstGenerating t y -> putWord8 1 *> put t *> put y
-    FirstOperating t y -> putWord8 2 *> put t *> put y
+    BadStartSubset -> putWord8 1
+    FirstGenerating t y -> putWord8 2 *> put t *> put y
+    FirstOperating t y -> putWord8 3 *> put t *> put y
   get = do
     x <- getWord8
     case x of
       0 -> do
         l <- getInt32be
         AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
-      1 -> FirstGenerating <$> get <*> get
-      2 -> FirstOperating <$> get <*> get
-      _ -> fail "First s"
+      1 -> pure BadStartSubset
+      2 -> FirstGenerating <$> get <*> get
+      3 -> FirstOperating <$> get <*> get
+      _ -> fail "First BS.ByteString"
 instance Serialize (First LBS.ByteString) where
   put x = case x of
     AvailableTopics ts -> do
@@ -381,17 +391,19 @@ instance Serialize (First LBS.ByteString) where
       let ls = Map.toList ts
       putInt32be (fromIntegral (length ls))
       void (traverse put ls)
-    FirstGenerating t y -> putWord8 1 *> put t *> put y
-    FirstOperating t y -> putWord8 2 *> put t *> put y
+    BadStartSubset -> putWord8 1
+    FirstGenerating t y -> putWord8 2 *> put t *> put y
+    FirstOperating t y -> putWord8 3 *> put t *> put y
   get = do
     x <- getWord8
     case x of
       0 -> do
         l <- getInt32be
         AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
-      1 -> FirstGenerating <$> get <*> get
-      2 -> FirstOperating <$> get <*> get
-      _ -> fail "First s"
+      1 -> pure BadStartSubset
+      2 -> FirstGenerating <$> get <*> get
+      3 -> FirstOperating <$> get <*> get
+      _ -> fail "First LBS.ByteString"
 
 -- | Convenience function for avoiding a case match over First
 getFirstGenerating :: First s -> Maybe (Topic, Generating s)
@@ -474,7 +486,7 @@ instance Serialize (Second BS.ByteString) where
         Start . Set.fromList <$> replicateM (fromIntegral l) get
       2 -> SecondOperating <$> get <*> get
       3 -> SecondGenerating <$> get <*> get
-      _ -> fail "Second s"
+      _ -> fail "Second BS.ByteString"
 instance Serialize (Second LBS.ByteString) where
   put x = case x of
     BadTopics ts -> do
@@ -500,7 +512,7 @@ instance Serialize (Second LBS.ByteString) where
         Start . Set.fromList <$> replicateM (fromIntegral l) get
       2 -> SecondOperating <$> get <*> get
       3 -> SecondGenerating <$> get <*> get
-      _ -> fail "Second s"
+      _ -> fail "Second LBS.ByteString"
 
 -- | Convenience function for avoiding a case match over First
 getSecondGenerating :: Second s -> Maybe (Topic, Generating s)
@@ -950,19 +962,22 @@ simpleTest' onSuccess onFailureSecond onFailureFirst onProgress suite = do
     encodeAndSendChan chan x = liftIO $ atomically (writeTChan chan x)
     receiveAndDecodeChan chan = liftIO $ atomically (readTChan chan)
 
-
+putByteString' :: BS.ByteString -> PutM ()
 putByteString' b = do
   putInt32be (fromIntegral (BS.length b))
   putByteString b
 
+getByteString' :: Get BS.ByteString
 getByteString' = do
   l <- getInt32be
   getByteString (fromIntegral l)
 
+putLazyByteString' :: LBS.ByteString -> PutM ()
 putLazyByteString' b = do
   putInt32be (fromIntegral (LBS.length b))
   putLazyByteString b
 
+getLazyByteString' :: Get LBS.ByteString
 getLazyByteString' = do
   l <- getInt32be
   getLazyByteString (fromIntegral l)

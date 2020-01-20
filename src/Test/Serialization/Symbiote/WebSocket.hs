@@ -42,9 +42,9 @@ import Control.Concurrent.STM
   ( TChan, TMVar, newTChanIO, readTChan, writeTChan, atomically
   , newEmptyTMVarIO, putTMVar, takeTMVar)
 import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
-import Control.Concurrent.Async (async, cancel, wait, Async)
+import Control.Concurrent.Async (async, cancel, Async)
 import Control.Concurrent.Chan.Scope (Scope (Read, Write))
-import Control.Concurrent.Chan.Extra (readOnly, writeOnly)
+import Control.Concurrent.Chan.Extra (writeOnly)
 import Control.Concurrent.Threaded.Hash (threaded)
 import Network.WebSockets.Simple
   (WebSocketsApp (..), WebSocketsAppParams (..), toClientAppTString, toClientAppTBinary, dimap', dimapJson, dimapStringify)
@@ -166,7 +166,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
       wsThread <- case network of
         Private -> do
           let onOpen :: WebSocketsAppParams IO (me LBS.ByteString) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
                 atomically (putTMVar outgoingThreadVar outgoingThread)
               app :: WebSocketsApp IO (them LBS.ByteString) (me LBS.ByteString)
@@ -183,7 +183,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
           let mkWsMessage = WithWebSocketIdent ident
 
               onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ do
                   x <- atomically (readTChan outgoing)
                   send (mkWsMessage x)
@@ -219,19 +219,21 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
             peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
             liftIO (threadDelay 1000000)
 
-      ( mainThread
+      ( _
         , outgoing :: TChanRW 'Read (WebSocketIdent, me LBS.ByteString)
         ) <- threaded incoming process
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
 
 
       let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me LBS.ByteString)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
+          onOpen WebSocketsAppParams{send} = do
             outgoingThread <- async $ forever $ do
               (ident, x) <- atomically (readTChanRW outgoing)
               send (WithWebSocketIdent ident x)
             atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them LBS.ByteString)) (WithWebSocketIdent (me LBS.ByteString))
+          app :: WebSocketsApp IO
+                   (WithWebSocketIdent (them LBS.ByteString))
+                   (WithWebSocketIdent (me LBS.ByteString))
           app = WebSocketsApp
             { onClose = \_ _ -> do
                 outgoingThread <- atomically (takeTMVar outgoingThreadVar)
@@ -239,11 +241,8 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
             , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
             , onOpen
             }
-      let webSocket :: WebSocketsApp IO
-                         (WithWebSocketIdent (them LBS.ByteString))
-                         (WithWebSocketIdent (me LBS.ByteString))
-                    -> IO ()
-          webSocket app =
+          webSocket :: IO ()
+          webSocket =
             runWebSocket $ toClientAppTBinary $
               ( case debug of
                   FullDebug -> logStdout
@@ -258,7 +257,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
                     putStrLn ("Can't parse buffer: " ++ show buf)
                     error e
                   Right x -> pure x
-      liftIO (webSocket app)
+      liftIO webSocket
 
 peerWebSocketByteString :: forall m stM them me
                          . MonadIO m
@@ -320,7 +319,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
       wsThread <- case network of
         Private -> do
           let onOpen :: WebSocketsAppParams IO (me BS.ByteString) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
                 atomically (putTMVar outgoingThreadVar outgoingThread)
               app :: WebSocketsApp IO (them BS.ByteString) (me BS.ByteString)
@@ -337,7 +336,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
           let mkWsMessage = WithWebSocketIdent ident
 
               onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ do
                   x <- atomically (readTChan outgoing)
                   send (mkWsMessage x)
@@ -373,19 +372,21 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
             peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
             liftIO (threadDelay 1000000)
 
-      ( mainThread
+      ( _
         , outgoing :: TChanRW 'Read (WebSocketIdent, me BS.ByteString)
         ) <- threaded incoming process
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
 
 
       let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me BS.ByteString)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
+          onOpen WebSocketsAppParams{send} = do
             outgoingThread <- async $ forever $ do
               (ident, x) <- atomically (readTChanRW outgoing)
               send (WithWebSocketIdent ident x)
             atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them BS.ByteString)) (WithWebSocketIdent (me BS.ByteString))
+          app :: WebSocketsApp IO
+                   (WithWebSocketIdent (them BS.ByteString))
+                   (WithWebSocketIdent (me BS.ByteString))
           app = WebSocketsApp
             { onClose = \_ _ -> do
                 outgoingThread <- atomically (takeTMVar outgoingThreadVar)
@@ -393,11 +394,8 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
             , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
             , onOpen
             }
-      let webSocket :: WebSocketsApp IO
-                         (WithWebSocketIdent (them BS.ByteString))
-                         (WithWebSocketIdent (me BS.ByteString))
-                    -> IO ()
-          webSocket app =
+          webSocket :: IO ()
+          webSocket =
             runWebSocket $ toClientAppTBinary $ toLazy $
               ( case debug of
                   FullDebug -> logStdout
@@ -419,7 +417,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
                 where
                   r = pure . LBS.toStrict
                   s = LBS.fromStrict
-      liftIO (webSocket app)
+      liftIO webSocket
 
 
 -- WebSockets can work with both Json 'Value's and 'BS.ByteString's
@@ -469,7 +467,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
       wsThread <- case network of
         Private -> do
           let onOpen :: WebSocketsAppParams IO (me Json.Value) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ atomically (readTChan outgoing) >>= send
                 atomically (putTMVar outgoingThreadVar outgoingThread)
               app :: WebSocketsApp IO (them Json.Value) (me Json.Value)
@@ -487,7 +485,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
           let mkWsMessage = WithWebSocketIdent ident
 
               onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
-              onOpen WebSocketsAppParams{close,send} = do
+              onOpen WebSocketsAppParams{send} = do
                 outgoingThread <- async $ forever $ do
                   x <- atomically (readTChan outgoing)
                   send (mkWsMessage x)
@@ -523,19 +521,21 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
             peer encodeAndSend receiveAndDecode onSuccess onFailure onProgress tests
             liftIO (threadDelay 1000000)
 
-      ( mainThread
+      ( _
         , outgoing :: TChanRW 'Read (WebSocketIdent, me Json.Value)
         ) <- threaded incoming process
       (outgoingThreadVar :: TMVar (Async ())) <- liftIO newEmptyTMVarIO
 
 
       let onOpen :: WebSocketsAppParams IO (WithWebSocketIdent (me Json.Value)) -> IO ()
-          onOpen WebSocketsAppParams{close,send} = do
+          onOpen WebSocketsAppParams{send} = do
             outgoingThread <- async $ forever $ do
               (ident, x) <- atomically (readTChanRW outgoing)
               send (WithWebSocketIdent ident x)
             atomically (putTMVar outgoingThreadVar outgoingThread)
-          app :: WebSocketsApp IO (WithWebSocketIdent (them Json.Value)) (WithWebSocketIdent (me Json.Value))
+          app :: WebSocketsApp IO
+                   (WithWebSocketIdent (them Json.Value))
+                   (WithWebSocketIdent (me Json.Value))
           app = WebSocketsApp
             { onClose = \_ _ -> do
                 outgoingThread <- atomically (takeTMVar outgoingThreadVar)
@@ -543,7 +543,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
             , onReceive = \_ (WithWebSocketIdent ident x) -> atomically (writeTChanRW incoming (ident, x))
             , onOpen
             }
-      let webSocket :: WebSocketsApp IO
+          webSocket :: WebSocketsApp IO
                          (WithWebSocketIdent (them Json.Value))
                          (WithWebSocketIdent (me Json.Value))
                     -> IO ()

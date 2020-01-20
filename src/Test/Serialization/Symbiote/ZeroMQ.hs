@@ -117,7 +117,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
             liftIO (threadDelay 1000000)
 
       -- manage invoked threads
-      ( mainThread
+      ( _
         , outgoing :: TChanRW 'Read (ZMQIdent, me BS.ByteString)
         ) <- threaded incoming process
 

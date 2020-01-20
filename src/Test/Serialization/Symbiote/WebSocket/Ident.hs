@@ -5,6 +5,18 @@
   , OverloadedStrings
   #-}
 
+{-|
+
+Module: Test.Serialization.Symbiote.WebSocket.Ident
+Copyright: (c) 2019 Athan Clark
+License: BSD-3-Style
+Maintainer: athan.clark@gmail.com
+Portability: GHC
+
+Data types used for WebSocket implementations
+
+-}
+
 module Test.Serialization.Symbiote.WebSocket.Ident where
 
 import Data.UUID (UUID, toText, fromText, toWords, fromWords)
@@ -17,7 +29,7 @@ import Data.Serialize.Put (putWord32be)
 import Data.Hashable (Hashable)
 import Test.QuickCheck (Arbitrary (..))
 import System.IO.Unsafe (unsafePerformIO)
-import Network.WebSockets.Simple (WebSocketsApp (..))
+
 
 newtype WebSocketIdent = WebSocketIdent {getWebSocketIdent :: UUID}
   deriving (Show, Eq, Ord, Hashable)
