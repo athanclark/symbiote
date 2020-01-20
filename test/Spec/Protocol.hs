@@ -13,14 +13,11 @@ import ServerOrClient (ServerOrClient (..))
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Types as Json
 import qualified Data.Serialize as Cereal
-import qualified Data.Serialize.Get as Cereal
-import qualified Data.Serialize.Put as Cereal
 import qualified Data.ByteString as BS
 import Data.Proxy
-import Control.Monad.IO.Class (liftIO)
 import Test.Serialization.Symbiote
   (SymbioteOperation (..), Generating, Operating, First, Second, Topic, SymbioteT, register)
-import Test.Serialization.Symbiote.Debug (Debug (..), Network (..))
+import Test.Serialization.Symbiote.Debug (Debug (..))
 import Test.Serialization.Symbiote.WebSocket
   ( firstPeerWebSocketJson, firstPeerWebSocketByteString
   , secondPeerWebSocketJson, secondPeerWebSocketByteString
@@ -35,7 +32,7 @@ import Test.Tasty.HUnit (testCase)
 import Network.WebSockets (runClient)
 import Network.WebSockets.Connection (defaultConnectionOptions)
 import Network.WebSockets.Simple (accept)
-import Network.WebSockets.Trans (runServerAppT, runClientAppT, ClientAppT)
+import Network.WebSockets.Trans (runServerAppT)
 import Network.Wai (responseLBS)
 import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Handler.Warp (run)
