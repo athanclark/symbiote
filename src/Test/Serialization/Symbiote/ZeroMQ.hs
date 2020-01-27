@@ -28,6 +28,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Serialize as Cereal
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Singleton.Class (Extractable)
+import Data.Restricted (Restricted)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Control.Aligned (MonadBaseControl, liftBaseWith)
@@ -38,10 +39,9 @@ import Control.Concurrent.Chan.Extra (writeOnly)
 import Control.Concurrent.STM (TChan, newTChanIO, writeTChan, readTChan, atomically)
 import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
 import Control.Concurrent.Threaded.Hash (threaded)
-import qualified System.ZMQ4 as Z
 import System.ZMQ4 (Router (..), Dealer (..), Pair (..))
-import System.ZMQ4.Monadic (runZMQ, async)
-import System.ZMQ4.Simple (ZMQIdent, socket, bind, send, receive, connect, setUUIDIdentity)
+import System.ZMQ4.Monadic (runZMQ, async, KeyFormat, setCurveServer, setCurvePublicKey, setCurveSecretKey, setCurveServerKey)
+import System.ZMQ4.Simple (ZMQIdent, socket, bind, send, receive, connect, setUUIDIdentity, Socket (..))
 import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -50,7 +50,7 @@ import Unsafe.Coerce (unsafeCoerce)
 secondPeerZeroMQ :: MonadIO m
                  => MonadBaseControl IO m stM
                  => Extractable stM
-                 => ZeroMQParams
+                 => ZeroMQParams f
                  -> Debug
                  -> SymbioteT BS.ByteString m () -- ^ Tests registered
                  -> m ()
@@ -59,34 +59,52 @@ secondPeerZeroMQ params debug = peerZeroMQ params debug secondPeer
 firstPeerZeroMQ :: MonadIO m
                 => MonadBaseControl IO m stM
                 => Extractable stM
-                => ZeroMQParams
+                => ZeroMQParams f
                 -> Debug
                 -> SymbioteT BS.ByteString m () -- ^ Tests registered
                 -> m ()
 firstPeerZeroMQ params debug = peerZeroMQ params debug firstPeer
 
+-- | Parameterized by optional keypairs associated with CurveMQ
+data ZeroMQServerOrClient f
+  = ZeroMQServer (Maybe (ServerKeys f))
+  | ZeroMQClient (Maybe (ClientKeys f))
 
-data ZeroMQServerOrClient
-  = ZeroMQServer
-  | ZeroMQClient
+data Key f = Key
+  { format :: KeyFormat f -- ^ Text via Z85 or raw binary
+  , key    :: Restricted f BS.ByteString
+  }
 
-data ZeroMQParams = ZeroMQParams
+data KeyPair f = KeyPair
+  { public :: Key f
+  , secret :: Key f
+  }
+
+newtype ServerKeys f = ServerKeys
+  { serverKeyPair :: KeyPair f
+  }
+
+data ClientKeys f = ClientKeys
+  { clientKeyPair :: KeyPair f
+  , clientServer  :: Key f -- ^ The public key of the server
+  }
+
+data ZeroMQParams f = ZeroMQParams
   { zmqHost           :: String
-  , zmqServerOrClient :: ZeroMQServerOrClient
+  , zmqServerOrClient :: ZeroMQServerOrClient f
   , zmqNetwork        :: Network
-  , zmqOnInit         :: forall a. Z.Socket a -> IO () -- ^ To manually adjust for encryption settings
   }
 
 
 -- | ZeroMQ can only work on 'BS.ByteString's
-peerZeroMQ :: forall m stM them me
+peerZeroMQ :: forall m stM them me f
             . MonadIO m
            => MonadBaseControl IO m stM
            => Extractable stM
            => Show (them BS.ByteString)
            => Cereal.Serialize (me BS.ByteString)
            => Cereal.Serialize (them BS.ByteString)
-           => ZeroMQParams
+           => ZeroMQParams f
            -> Debug
            -> ( (me BS.ByteString -> m ())
              -> m (them BS.ByteString)
@@ -98,9 +116,9 @@ peerZeroMQ :: forall m stM them me
               ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
            -> SymbioteT BS.ByteString m () -- ^ Tests registered
            -> m ()
-peerZeroMQ (ZeroMQParams host clientOrServer network onInit) debug peer tests =
+peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
   case (network,clientOrServer) of
-    (Public,ZeroMQServer) -> do
+    (Public, ZeroMQServer mKeys) -> do
       (incoming :: TChanRW 'Write (ZMQIdent, them BS.ByteString)) <- writeOnly <$> liftIO (atomically newTChanRW)
       -- the process that gets invoked for each new thread. Writes to a @me BS.ByteString@ and reads from a @them BS.ByteString@.
       let process :: TChanRW 'Read (them BS.ByteString) -> TChanRW 'Write (me BS.ByteString) -> m ()
@@ -126,8 +144,12 @@ peerZeroMQ (ZeroMQParams host clientOrServer network onInit) debug peer tests =
 
       -- forever bind to ZeroMQ
       runZMQ $ do
-        s <- socket Router Dealer
-        liftIO (onInit (unsafeCoerce s))
+        s@(Socket s') <- socket Router Dealer
+        case mKeys of
+          Nothing -> pure ()
+          Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
+            setCurveServer True s'
+            setCurveSecretKey secFormat secKey s'
         bind s host
 
         -- sending loop (separate thread)
@@ -181,8 +203,15 @@ peerZeroMQ (ZeroMQParams host clientOrServer network onInit) debug peer tests =
       zThread <- case network of
         -- is a ZeroMQClient
         Public -> runZMQ $ async $ do
-          s <- socket Dealer Router
-          liftIO (onInit (unsafeCoerce s))
+          s@(Socket s') <- socket Dealer Router
+          case clientOrServer of
+            ZeroMQClient mKeys -> case mKeys of
+              Nothing -> pure ()
+              Just (ClientKeys (KeyPair (Key pubFormat pubKey) (Key secFormat secKey)) (Key servFormat server)) -> do
+                setCurvePublicKey pubFormat pubKey s'
+                setCurveSecretKey secFormat secKey s'
+                setCurveServerKey servFormat server s'
+            _ -> error "impossible case"
           setUUIDIdentity s
           connect s host
 
@@ -190,17 +219,26 @@ peerZeroMQ (ZeroMQParams host clientOrServer network onInit) debug peer tests =
 
           receivingLoop s
         Private -> case clientOrServer of
-          ZeroMQServer -> runZMQ $ async $ do
-            s <- socket Pair Pair
-            liftIO (onInit (unsafeCoerce s))
+          ZeroMQServer mKeys -> runZMQ $ async $ do
+            s@(Socket s') <- socket Pair Pair
+            case mKeys of
+              Nothing -> pure ()
+              Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
+                setCurveServer True s'
+                setCurveSecretKey secFormat secKey s'
             bind s host
 
             sendingThread s
 
             receivingLoop s
-          ZeroMQClient -> runZMQ $ async $ do
-            s <- socket Pair Pair
-            liftIO (onInit (unsafeCoerce s))
+          ZeroMQClient mKeys -> runZMQ $ async $ do
+            s@(Socket s') <- socket Pair Pair
+            case mKeys of
+              Nothing -> pure ()
+              Just (ClientKeys (KeyPair (Key pubFormat pubKey) (Key secFormat secKey)) (Key servFormat server)) -> do
+                setCurvePublicKey pubFormat pubKey s'
+                setCurveSecretKey secFormat secKey s'
+                setCurveServerKey servFormat server s'
             connect s host
 
             sendingThread s
