@@ -38,10 +38,12 @@ import Control.Concurrent.Chan.Extra (writeOnly)
 import Control.Concurrent.STM (TChan, newTChanIO, writeTChan, readTChan, atomically)
 import Control.Concurrent.STM.TChan.Typed (TChanRW, newTChanRW, writeTChanRW, readTChanRW)
 import Control.Concurrent.Threaded.Hash (threaded)
+import qualified System.ZMQ4 as Z
 import System.ZMQ4 (Router (..), Dealer (..), Pair (..))
 import System.ZMQ4.Monadic (runZMQ, async)
 import System.ZMQ4.Simple (ZMQIdent, socket, bind, send, receive, connect, setUUIDIdentity)
 import System.Timeout (timeout)
+import Unsafe.Coerce (unsafeCoerce)
 
 
 
@@ -72,6 +74,7 @@ data ZeroMQParams = ZeroMQParams
   { zmqHost           :: String
   , zmqServerOrClient :: ZeroMQServerOrClient
   , zmqNetwork        :: Network
+  , zmqOnInit         :: forall a. Z.Socket a -> IO () -- ^ To manually adjust for encryption settings
   }
 
 
@@ -95,7 +98,7 @@ peerZeroMQ :: forall m stM them me
               ) -- ^ Encode and send, receive and decode, on success, on failure, on progress, and test set
            -> SymbioteT BS.ByteString m () -- ^ Tests registered
            -> m ()
-peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
+peerZeroMQ (ZeroMQParams host clientOrServer network onInit) debug peer tests =
   case (network,clientOrServer) of
     (Public,ZeroMQServer) -> do
       (incoming :: TChanRW 'Write (ZMQIdent, them BS.ByteString)) <- writeOnly <$> liftIO (atomically newTChanRW)
@@ -124,6 +127,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
       -- forever bind to ZeroMQ
       runZMQ $ do
         s <- socket Router Dealer
+        liftIO (onInit (unsafeCoerce s))
         bind s host
 
         -- sending loop (separate thread)
@@ -178,6 +182,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
         -- is a ZeroMQClient
         Public -> runZMQ $ async $ do
           s <- socket Dealer Router
+          liftIO (onInit (unsafeCoerce s))
           setUUIDIdentity s
           connect s host
 
@@ -187,6 +192,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
         Private -> case clientOrServer of
           ZeroMQServer -> runZMQ $ async $ do
             s <- socket Pair Pair
+            liftIO (onInit (unsafeCoerce s))
             bind s host
 
             sendingThread s
@@ -194,6 +200,7 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
             receivingLoop s
           ZeroMQClient -> runZMQ $ async $ do
             s <- socket Pair Pair
+            liftIO (onInit (unsafeCoerce s))
             connect s host
 
             sendingThread s
