@@ -165,15 +165,15 @@ deriving instance Generic (Operation (AbidesEq a))
 deriving instance Show a => Show (Operation (AbidesEq a))
 instance Arbitrary a => Arbitrary (Operation (AbidesEq a)) where
   arbitrary = oneof
-    [ EqSymmetry <$> arbitrary
-    , pure EqReflexive
+    [ pure EqReflexive
+    , EqSymmetry <$> arbitrary
     , EqTransitive <$> arbitrary <*> arbitrary
     , EqNegation <$> arbitrary
     ]
 instance ToJSON a => ToJSON (Operation (AbidesEq a)) where
   toJSON op = case op of
-    EqSymmetry y -> object ["symmetry" .= y]
     EqReflexive -> String "reflexive"
+    EqSymmetry y -> object ["symmetry" .= y]
     EqTransitive y z -> object ["transitive" .= object ["y" .= y, "z" .= z]]
     EqNegation y -> object ["negation" .= y]
 instance FromJSON a => FromJSON (Operation (AbidesEq a)) where
@@ -190,15 +190,15 @@ instance FromJSON a => FromJSON (Operation (AbidesEq a)) where
   parseJSON x = typeMismatch "Operation (AbidesEq a)" x
 instance Serialize a => Serialize (Operation (AbidesEq a)) where
   put op = case op of
-    EqSymmetry y -> putWord8 0 *> put y
-    EqReflexive -> putWord8 1
+    EqReflexive -> putWord8 0
+    EqSymmetry y -> putWord8 1 *> put y
     EqTransitive y z -> putWord8 2 *> put y *> put z
     EqNegation y -> putWord8 3 *> put y
   get = do
     x <- getWord8
     case x of
-      0 -> EqSymmetry <$> get
-      1 -> pure EqReflexive
+      0 -> pure EqReflexive
+      1 -> EqSymmetry <$> get
       2 -> EqTransitive <$> get <*> get
       3 -> EqNegation <$> get
       _ -> fail "Operation (AbidesEq a)"
