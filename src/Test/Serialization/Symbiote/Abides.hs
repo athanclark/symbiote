@@ -258,11 +258,12 @@ instance Serialize a => Serialize (Operation (AbidesOrd a)) where
 
 instance (Enum a, Ord a) => SymbioteOperation (AbidesEnum a) Bool where
   data Operation (AbidesEnum a)
-    = EnumOrdOperation
+    = EnumOrd (Operation (AbidesOrd a))
     | EnumCompareHom (AbidesEnum a)
     | EnumPredSucc
     | EnumSuccPred
-  perform op x = case op of
+  perform op x@(AbidesEnum x') = case op of
+    EnumOrd op' -> perform op' (AbidesOrd x')
     EnumCompareHom y -> Enum.compareHom x y
     EnumPredSucc -> Enum.predsucc x
     EnumSuccPred -> Enum.succpred x
@@ -270,17 +271,22 @@ deriving instance Generic (Operation (AbidesEnum a))
 deriving instance Show a => Show (Operation (AbidesEnum a))
 instance Arbitrary a => Arbitrary (Operation (AbidesEnum a)) where
   arbitrary = oneof
-    [ EnumCompareHom <$> arbitrary
+    [ EnumOrd <$> arbitrary
+    , EnumCompareHom <$> arbitrary
     , pure EnumPredSucc
     , pure EnumSuccPred
     ]
 instance ToJSON a => ToJSON (Operation (AbidesEnum a)) where
   toJSON op = case op of
+    EnumOrd op' -> object ["ord" .= op']
     EnumCompareHom y -> object ["compareHom" .= y]
     EnumPredSucc -> String "predsucc"
     EnumSuccPred -> String "succpred"
 instance FromJSON a => FromJSON (Operation (AbidesEnum a)) where
-  parseJSON (Object o) = EnumCompareHom <$> o .: "compareHom"
+  parseJSON (Object o) = enumOrd <|> compareHom
+    where
+      enumOrd = EnumOrd <$> o .: "ord"
+      compareHom = EnumCompareHom <$> o .: "compareHom"
   parseJSON x@(String s)
     | s == "predsucc" = pure EnumPredSucc
     | s == "succpred" = pure EnumSuccPred
@@ -288,15 +294,17 @@ instance FromJSON a => FromJSON (Operation (AbidesEnum a)) where
   parseJSON x = typeMismatch "Operation (AbidesEnum a)" x
 instance Serialize a => Serialize (Operation (AbidesEnum a)) where
   put op = case op of
-    EnumCompareHom y -> putWord8 0 *> put y
-    EnumPredSucc -> putWord8 1
-    EnumSuccPred -> putWord8 2
+    EnumOrd op' -> putWord8 0 *> put op'
+    EnumCompareHom y -> putWord8 1 *> put y
+    EnumPredSucc -> putWord8 2
+    EnumSuccPred -> putWord8 3
   get = do
     x <- getWord8
     case x of
-      0 -> EnumCompareHom <$> get
-      1 -> pure EnumPredSucc
-      2 -> pure EnumSuccPred
+      0 -> EnumOrd <$> get
+      1 -> EnumCompareHom <$> get
+      2 -> pure EnumPredSucc
+      3 -> pure EnumSuccPred
       _ -> fail "Operation (AbidesEnum a)"
 
 instance (Num a, Eq a) => SymbioteOperation (AbidesSemiring a) Bool where

@@ -70,7 +70,7 @@ class SymbioteOperation a o => Symbiote a o s | a -> o where
   decodeOp  :: s -> Maybe (Operation a)
 
 
--- | Unique name of a type, for a suite of tests
+-- | Unique name of a type, for a suite of tests. <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#topic Ref - Topic>.
 newtype Topic = Topic Text
   deriving (Eq, Ord, Show, IsString, Arbitrary, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
 -- | Serialized as a @String32@ in the <https://symbiotic-data.github.io/#/data/?id=string32 symbiotic-data standard>.

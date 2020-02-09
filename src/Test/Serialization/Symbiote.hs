@@ -185,6 +185,7 @@ register t maxSize Proxy = do
 
 
 -- | Messages sent by a peer during their generating phase - polymorphic in the serialization medium.
+-- <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#generating Ref - Generating>
 data Generating s
   = -- | \"I\'ve generated a value and operation, here you go.\"
     Generated
@@ -264,6 +265,7 @@ instance Serialize (Generating LBS.ByteString) where
       _ -> fail "Generating LazyByteString"
 
 -- | Messages sent by a peer during their operating phase - polymorphic in the serialization medium.
+-- <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#operating Ref - Operating>
 data Operating s
   = -- | \"I\'ve performed the operation on the value, and here's the output result.\"
     Operated s
@@ -318,6 +320,7 @@ instance Serialize (Operating LBS.ByteString) where
       _ -> fail "Operating LazyByteString"
 
 -- | Messages sent by the first peer - polymorphic in the serialization medium.
+-- <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#first Ref - First>
 data First s
   = -- | \"Here are the topics I support.\"
     AvailableTopics (Map Topic Int32)
@@ -419,6 +422,7 @@ getFirstOperating x = case x of
 
 
 -- | Messages sent by the second peer - polymorphic in the serialization medium.
+-- <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#second Ref - Second>
 data Second s
   = -- | \"Although my topics should be at least a subset of your topics available,
     -- the following of mine do not have the same max size as yours.\"
