@@ -205,10 +205,12 @@ instance Serialize a => Serialize (Operation (AbidesEq a)) where
 
 instance (Ord a) => SymbioteOperation (AbidesOrd a) Bool where
   data Operation (AbidesOrd a)
-    = OrdReflexive
+    = OrdEq (Operation (AbidesEq a))
+    | OrdReflexive
     | OrdAntiSymmetry (AbidesOrd a)
     | OrdTransitive (AbidesOrd a) (AbidesOrd a)
-  perform op x = case op of
+  perform op x@(AbidesOrd x') = case op of
+    OrdEq op' -> perform op' (AbidesEq x')
     OrdReflexive -> Ord.reflexive x
     OrdAntiSymmetry y -> Ord.antisymmetry x y
     OrdTransitive y z -> Ord.transitive x y z
@@ -216,18 +218,21 @@ deriving instance Generic (Operation (AbidesOrd a))
 deriving instance Show a => Show (Operation (AbidesOrd a))
 instance Arbitrary a => Arbitrary (Operation (AbidesOrd a)) where
   arbitrary = oneof
-    [ pure OrdReflexive
+    [ OrdEq <$> arbitrary
+    , pure OrdReflexive
     , OrdAntiSymmetry <$> arbitrary
     , OrdTransitive <$> arbitrary <*> arbitrary
     ]
 instance ToJSON a => ToJSON (Operation (AbidesOrd a)) where
   toJSON op = case op of
+    OrdEq op' -> object ["eq" .= op']
     OrdReflexive -> String "reflexive"
     OrdAntiSymmetry y -> object ["antisymmetry" .= y]
     OrdTransitive y z -> object ["transitive" .= object ["y" .= y, "z" .= z]]
 instance FromJSON a => FromJSON (Operation (AbidesOrd a)) where
-  parseJSON (Object o) = transitive <|> antisymmetry
+  parseJSON (Object o) = ordEq <|> transitive <|> antisymmetry
     where
+      ordEq = OrdEq <$> o .: "eq"
       transitive = do
         o' <- o .: "transitive"
         OrdTransitive <$> o' .: "y" <*> o' .: "z"
@@ -238,20 +243,23 @@ instance FromJSON a => FromJSON (Operation (AbidesOrd a)) where
   parseJSON x = typeMismatch "Operation (AbidesOrd a)" x
 instance Serialize a => Serialize (Operation (AbidesOrd a)) where
   put op = case op of
-    OrdReflexive -> putWord8 0
-    OrdAntiSymmetry y -> putWord8 1 *> put y
-    OrdTransitive y z -> putWord8 2 *> put y *> put z
+    OrdEq op' -> putWord8 0 *> put op'
+    OrdReflexive -> putWord8 1
+    OrdAntiSymmetry y -> putWord8 2 *> put y
+    OrdTransitive y z -> putWord8 3 *> put y *> put z
   get = do
     x <- getWord8
     case x of
-      0 -> pure OrdReflexive
-      1 -> OrdAntiSymmetry <$> get
-      2 -> OrdTransitive <$> get <*> get
+      0 -> OrdEq <$> get
+      1 -> pure OrdReflexive
+      2 -> OrdAntiSymmetry <$> get
+      3 -> OrdTransitive <$> get <*> get
       _ -> fail "Operation (AbidesOrd a)"
 
 instance (Enum a, Ord a) => SymbioteOperation (AbidesEnum a) Bool where
   data Operation (AbidesEnum a)
-    = EnumCompareHom (AbidesEnum a)
+    = EnumOrdOperation
+    | EnumCompareHom (AbidesEnum a)
     | EnumPredSucc
     | EnumSuccPred
   perform op x = case op of
