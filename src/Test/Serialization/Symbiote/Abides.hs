@@ -216,8 +216,8 @@ deriving instance Generic (Operation (AbidesOrd a))
 deriving instance Show a => Show (Operation (AbidesOrd a))
 instance Arbitrary a => Arbitrary (Operation (AbidesOrd a)) where
   arbitrary = oneof
-    [ OrdAntiSymmetry <$> arbitrary
-    , pure OrdReflexive
+    [ pure OrdReflexive
+    , OrdAntiSymmetry <$> arbitrary
     , OrdTransitive <$> arbitrary <*> arbitrary
     ]
 instance ToJSON a => ToJSON (Operation (AbidesOrd a)) where
