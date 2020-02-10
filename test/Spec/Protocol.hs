@@ -95,7 +95,7 @@ protocolTests =
             secondPeerZeroMQ
               ZeroMQParams
                 { zmqHost = "tcp://*:3002"
-                , zmqServerOrClient = ZeroMQServer
+                , zmqServerOrClient = ZeroMQServer Nothing -- no keys because it's local
                 , zmqNetwork = network
                 }
               NoDebug byteStringTests
@@ -105,7 +105,7 @@ protocolTests =
             firstPeerZeroMQ
               ZeroMQParams
                 { zmqHost = "tcp://127.0.0.1:3002"
-                , zmqServerOrClient = ZeroMQClient
+                , zmqServerOrClient = ZeroMQClient Nothing -- no keys because it's local
                 , zmqNetwork = network
                 }
               NoDebug byteStringTests
