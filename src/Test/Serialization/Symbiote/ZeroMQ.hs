@@ -1,6 +1,7 @@
 {-# LANGUAGE
     DataKinds
   , RankNTypes
+  , BangPatterns
   , FlexibleContexts
   , ScopedTypeVariables
   #-}
@@ -67,17 +68,17 @@ firstPeerZeroMQ params debug = peerZeroMQ params debug firstPeer
 
 -- | Parameterized by optional keypairs associated with CurveMQ
 data ZeroMQServerOrClient f
-  = ZeroMQServer (Maybe (ServerKeys f))
-  | ZeroMQClient (Maybe (ClientKeys f))
+  = ZeroMQServer !(Maybe (ServerKeys f))
+  | ZeroMQClient !(Maybe (ClientKeys f))
 
 data Key f = Key
-  { format :: KeyFormat f -- ^ Text via Z85 or raw binary
-  , key    :: Restricted f BS.ByteString
+  { format :: !(KeyFormat f) -- ^ Text via Z85 or raw binary
+  , key    :: {-# UNPACK #-} !(Restricted f BS.ByteString)
   }
 
 data KeyPair f = KeyPair
-  { public :: Key f
-  , secret :: Key f
+  { public :: !(Key f)
+  , secret :: !(Key f)
   }
 
 newtype ServerKeys f = ServerKeys
@@ -85,14 +86,14 @@ newtype ServerKeys f = ServerKeys
   }
 
 data ClientKeys f = ClientKeys
-  { clientKeyPair :: KeyPair f
-  , clientServer  :: Key f -- ^ The public key of the server
+  { clientKeyPair :: !(KeyPair f)
+  , clientServer  :: !(Key f) -- ^ The public key of the server
   }
 
 data ZeroMQParams f = ZeroMQParams
-  { zmqHost           :: String
-  , zmqServerOrClient :: ZeroMQServerOrClient f
-  , zmqNetwork        :: Network
+  { zmqHost           :: !String
+  , zmqServerOrClient :: !(ZeroMQServerOrClient f)
+  , zmqNetwork        :: !Network
   }
 
 
@@ -228,7 +229,8 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
               Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
                 liftIO $ putStrLn "am I running?"
                 setCurveServer True s'
-                setCurveSecretKey secFormat secKey s'
+                setCurveSecretKey secFormat secKey s' -- FIXME
+                pure ()
             bind s host
 
             sendingThread s
