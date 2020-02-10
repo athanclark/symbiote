@@ -222,8 +222,11 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
           ZeroMQServer mKeys -> runZMQ $ async $ do
             s@(Socket s') <- socket Pair Pair
             case mKeys of
-              Nothing -> pure ()
+              Nothing -> do
+                liftIO $ putStrLn "what about me?"
+                pure ()
               Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
+                liftIO $ putStrLn "am I running?"
                 setCurveServer True s'
                 setCurveSecretKey secFormat secKey s'
             bind s host
