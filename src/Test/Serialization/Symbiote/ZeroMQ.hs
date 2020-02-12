@@ -97,6 +97,8 @@ data ZeroMQParams f = ZeroMQParams
   }
 
 
+{-# DEPRECATED peerZeroMQ "Don't use this function - it's not working right now" #-}
+
 -- | ZeroMQ can only work on 'BS.ByteString's
 peerZeroMQ :: forall m stM them me f
             . MonadIO m
@@ -146,12 +148,13 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
       -- forever bind to ZeroMQ
       runZMQ $ do
         s@(Socket s') <- socket Router Dealer
+        bind s host
         case mKeys of
           Nothing -> pure ()
           Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
             setCurveServer True s'
             setCurveSecretKey secFormat secKey s'
-        bind s host
+            pure ()
 
         -- sending loop (separate thread)
         void $ async $ forever $ do
@@ -205,6 +208,8 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
         -- is a ZeroMQClient
         Public -> runZMQ $ async $ do
           s@(Socket s') <- socket Dealer Router
+          setUUIDIdentity s
+          connect s host
           case clientOrServer of
             ZeroMQClient mKeys -> case mKeys of
               Nothing -> pure ()
@@ -212,9 +217,8 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
                 setCurvePublicKey pubFormat pubKey s'
                 setCurveSecretKey secFormat secKey s'
                 setCurveServerKey servFormat server s'
+                pure ()
             _ -> error "impossible case"
-          setUUIDIdentity s
-          connect s host
 
           sendingThread s
 
@@ -222,29 +226,33 @@ peerZeroMQ (ZeroMQParams host clientOrServer network) debug peer tests =
         Private -> case clientOrServer of
           ZeroMQServer mKeys -> runZMQ $ async $ do
             s@(Socket s') <- socket Pair Pair
+            bind s host
             case mKeys of
               Nothing -> do
-                liftIO $ putStrLn "what about me?"
                 pure ()
               Just (ServerKeys (KeyPair _ (Key secFormat secKey))) -> do
-                liftIO $ putStrLn "am I running?"
                 setCurveServer True s'
-                setCurveSecretKey secFormat secKey s' -- FIXME
+                setCurveSecretKey secFormat secKey s'
                 pure ()
-            bind s host
 
             sendingThread s
 
             receivingLoop s
           ZeroMQClient mKeys -> runZMQ $ async $ do
             s@(Socket s') <- socket Pair Pair
+            connect s host
+            liftIO $ putStrLn "connected"
             case mKeys of
-              Nothing -> pure ()
+              Nothing -> do
+                liftIO $ putStrLn "no keys"
+                pure ()
               Just (ClientKeys (KeyPair (Key pubFormat pubKey) (Key secFormat secKey)) (Key servFormat server)) -> do
+                liftIO $ putStrLn "keys"
                 setCurvePublicKey pubFormat pubKey s'
                 setCurveSecretKey secFormat secKey s'
                 setCurveServerKey servFormat server s'
-            connect s host
+
+            liftIO $ putStrLn "keyed"
 
             sendingThread s
 

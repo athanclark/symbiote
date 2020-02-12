@@ -141,7 +141,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Lazy ByteString Topic finished: " ++ show t
           onFailure = liftIO . defaultFailure
           onProgress t n = case debug of
             NoDebug -> nullProgress t n
@@ -211,7 +211,7 @@ peerWebSocketLazyByteString (WebSocketParams runWebSocket clientOrServer network
                 receiveAndDecode :: m (them LBS.ByteString)
                 receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
 
-                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onSuccess t = liftIO $ putStrLn $ "WebSocket Lazy ByteString Topic finished: " ++ show t
                 onFailure = liftIO . defaultFailure
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
@@ -287,7 +287,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onSuccess t = liftIO $ putStrLn $ "WebSocket ByteString Topic finished: " ++ show t
           onFailure = liftIO . defaultFailure
           onProgress t n = case debug of
             NoDebug -> nullProgress t n
@@ -364,7 +364,7 @@ peerWebSocketByteString (WebSocketParams runWebSocket clientOrServer network) de
                 receiveAndDecode :: m (them BS.ByteString)
                 receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
 
-                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onSuccess t = liftIO $ putStrLn $ "WebSocket ByteString Topic finished: " ++ show t
                 onFailure = liftIO . defaultFailure
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
@@ -448,7 +448,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
 
       let encodeAndSend x = liftIO $ atomically $ writeTChan outgoing x
           receiveAndDecode = liftIO $ atomically $ readTChan incoming
-          onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+          onSuccess t = liftIO $ putStrLn $ "WebSocket Json Topic finished: " ++ show t
           onFailure = liftIO . defaultFailure
           onProgress t n = case debug of
             NoDebug -> nullProgress t n
@@ -513,7 +513,7 @@ peerWebSocketJson (WebSocketParams runWebSocket clientOrServer network) debug pe
                 receiveAndDecode :: m (them Json.Value)
                 receiveAndDecode = liftIO $ atomically $ readTChanRW inputs
 
-                onSuccess t = liftIO $ putStrLn $ "WebSocket Topic finished: " ++ show t
+                onSuccess t = liftIO $ putStrLn $ "WebSocket Json Topic finished: " ++ show t
                 onFailure = liftIO . defaultFailure
                 onProgress t n = case debug of
                   NoDebug -> nullProgress t n
