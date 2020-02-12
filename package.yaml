@@ -1,5 +1,5 @@
 name:                symbiote
-version:             0.0.4
+version:             0.0.5
 github:              "athanclark/symbiote"
 license:             BSD3
 author:              "Athan Clark"
@@ -42,11 +42,22 @@ dependencies:
 - websockets-simple >= 0.2.0
 - websockets-simple-extra
 - wai-transformers >= 0.1.0
-- zeromq4-haskell
-- zeromq4-simple >= 0.0.0.2
+# - zeromq4-haskell
+# - zeromq4-simple >= 0.0.0.2
 
 library:
   source-dirs: src
+  exposed-modules:
+    - Test.Serialization.Symbiote
+    - Test.Serialization.Symbiote.Core
+    - Test.Serialization.Symbiote.Debug
+    - Test.Serialization.Symbiote.Abides
+    - Test.Serialization.Symbiote.Cereal
+    - Test.Serialization.Symbiote.Cereal.Lazy
+    - Test.Serialization.Symbiote.Aeson
+    - Test.Serialization.Symbiote.WebSocket
+    - Test.Serialization.Symbiote.WebSocket.Ident
+
 
 tests:
   symbiote-test:
