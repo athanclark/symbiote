@@ -86,7 +86,8 @@ and "how to receive" messages, and likewise how to report status.
 
 module Test.Serialization.Symbiote
   ( -- * Suite Building
-    SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, SymbioteT, register
+    SymbioteOperation (..), Symbiote (..), SimpleSerialization (..), Topic, Size, AvailableTopics'
+  , SymbioteT, register
   , -- * Protocol Messages
     First (..), Second (..), Generating (..), Operating (..)
   , -- * Result Handling
