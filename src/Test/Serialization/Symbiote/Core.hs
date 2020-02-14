@@ -82,6 +82,10 @@ instance Serialize Topic where
     l <- getInt32be
     Topic . pack <$> replicateM (fromIntegral l) get
 
+-- | Network communicated size value for random generation. <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#size Ref - Size>.
+newtype Size = Size Int32
+  deriving (Eq, Ord, Show, ToJSON, FromJSON, Serialize, Num, Real, Enum, Integral, Arbitrary)
+
 -- | The state-machine representation for a particular topic, identical for each peer. As the protocol progresses and messages are passed, and values are generated, this
 -- value will change over time, and is unique for each topic.
 data SymbioteProtocol a s
@@ -102,7 +106,7 @@ data SymbioteProtocol a s
 
 -- | Protocol state, with amended \"current generation value\" information
 data SymbioteGeneration a s = SymbioteGeneration
-  { size     :: Int32 -- ^ The current \"size\" for the generated values and operations, with respect to QuickCheck\'s <http://hackage.haskell.org/package/QuickCheck-2.13.2/docs/Test-QuickCheck-Gen.html#v:sized size> parameter.
+  { size     :: Size -- ^ The current \"size\" for the generated values and operations, with respect to QuickCheck\'s <http://hackage.haskell.org/package/QuickCheck-2.13.2/docs/Test-QuickCheck-Gen.html#v:sized size> parameter.
   , protocol :: SymbioteProtocol a s -- ^ The rest of the state
   }
 
@@ -120,7 +124,7 @@ data SymbioteState a o s =
   { generate   :: Gen a -- ^ Generate a random value
   , generateOp :: Gen (Operation a) -- ^ Generate a random operation
   , equal      :: o -> o -> Bool -- ^ Are the outputs equal?
-  , maxSize    :: Int32 -- ^ Maximum size the internal generation will approach to - with respect to QuickCheck\'s <http://hackage.haskell.org/package/QuickCheck-2.13.2/docs/Test-QuickCheck-Gen.html#v:sized size> parameter
+  , maxSize    :: Size -- ^ Maximum size the internal generation will approach to - with respect to QuickCheck\'s <http://hackage.haskell.org/package/QuickCheck-2.13.2/docs/Test-QuickCheck-Gen.html#v:sized size> parameter
   , generation :: TVar (SymbioteGeneration a s) -- ^ The actual state of the topic, stored as an atomically modifiable 'TVar'
   , encode'    :: a -> s -- ^ 'encode'
   , encodeOut' :: o -> s -- ^ 'encodeOut'

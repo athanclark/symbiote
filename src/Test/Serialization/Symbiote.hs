@@ -1,6 +1,7 @@
 {-# LANGUAGE
     RankNTypes
   , TypeFamilies
+  , TupleSections
   , DeriveGeneric
   , NamedFieldPuns
   , RecordWildCards
@@ -12,6 +13,7 @@
   , UndecidableInstances
   , MultiParamTypeClasses
   , ExistentialQuantification
+  , GeneralizedNewtypeDeriving
   #-}
 
 {-|
@@ -95,7 +97,7 @@ module Test.Serialization.Symbiote
 
 import Test.Serialization.Symbiote.Core
   ( Topic (..), newGeneration, SymbioteState (..), ExistsSymbiote (..), SymbioteT, runSymbioteT
-  , GenerateSymbiote (..), generateSymbiote, getProgress, Symbiote (..), SymbioteOperation (..))
+  , GenerateSymbiote (..), generateSymbiote, getProgress, Symbiote (..), SymbioteOperation (..), Size)
 
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -111,6 +113,8 @@ import Data.Aeson.Types (typeMismatch)
 import Data.Serialize (Serialize (..))
 import Data.Serialize.Put (putWord8, putInt32be, putByteString, putLazyByteString, PutM)
 import Data.Serialize.Get (getWord8, getInt32be, getByteString, getLazyByteString, Get)
+import Data.HashMap.Lazy (HashMap)
+import qualified Data.HashMap.Lazy as HM
 import Text.Printf (printf)
 import Control.Concurrent.STM
   (TVar, newTVarIO, readTVarIO, writeTVar, atomically, newTChan, readTChan, writeTChan)
@@ -158,7 +162,7 @@ register :: forall a o s m
          => Eq o
          => MonadIO m
          => Topic -- ^ Topic name as a 'Text'
-         -> Int32 -- ^ Max size
+         -> Size -- ^ Max size
          -> Proxy a -- ^ Reference to the datatype
          -> SymbioteT s m ()
 register t maxSize Proxy = do
@@ -319,11 +323,32 @@ instance Serialize (Operating LBS.ByteString) where
       2 -> OperatingNoParseOperation <$> getLazyByteString'
       _ -> fail "Operating LazyByteString"
 
+-- | Mapping of 'Topic' to 'Size'. <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#availabletopics Ref - AvailableTopics>.
+newtype AvailableTopics' = AvailableTopics' (Map Topic Size)
+  deriving (Eq, Ord, Show, Monoid, Semigroup, Arbitrary)
+instance ToJSON AvailableTopics' where
+  toJSON (AvailableTopics' xs) =
+    Object $ HM.fromList $ map (\(Topic k, v) -> (k, toJSON v)) $ Map.toList xs
+instance FromJSON AvailableTopics' where
+  parseJSON (Object o) = do
+    xs <- traverse (\(k,v) -> (Topic k,) <$> parseJSON v) (HM.toList o)
+    pure $ AvailableTopics' $ Map.fromList xs
+  parseJSON json = typeMismatch "AvailableTopics'" json
+instance Serialize AvailableTopics' where
+  put (AvailableTopics' xs) = do
+    let ls = Map.toList xs
+    putInt32be (fromIntegral (length ls))
+    void (traverse put ls)
+  get = do
+    len <- getInt32be
+    AvailableTopics' . Map.fromList <$> replicateM (fromIntegral len) get
+
+
 -- | Messages sent by the first peer - polymorphic in the serialization medium.
 -- <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#first Ref - First>
 data First s
   = -- | \"Here are the topics I support.\"
-    AvailableTopics (Map Topic Int32)
+    AvailableTopics AvailableTopics'
   | -- | \"I got your subset of topics, but they don\'t match to mine.\"
     BadStartSubset
   | -- | \"It\'s my turn to generate, so here\'s a generating message.\"
@@ -369,40 +394,28 @@ instance FromJSON s => FromJSON (First s) where
       fail' = typeMismatch "First s" json
 instance Serialize (First BS.ByteString) where
   put x = case x of
-    AvailableTopics ts -> do
-      putWord8 0
-      let ls = Map.toList ts
-      putInt32be (fromIntegral (length ls))
-      void (traverse put ls)
+    AvailableTopics ts -> putWord8 0 *> put ts
     BadStartSubset -> putWord8 1
     FirstGenerating t y -> putWord8 2 *> put t *> put y
     FirstOperating t y -> putWord8 3 *> put t *> put y
   get = do
     x <- getWord8
     case x of
-      0 -> do
-        l <- getInt32be
-        AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      0 -> AvailableTopics <$> get
       1 -> pure BadStartSubset
       2 -> FirstGenerating <$> get <*> get
       3 -> FirstOperating <$> get <*> get
       _ -> fail "First BS.ByteString"
 instance Serialize (First LBS.ByteString) where
   put x = case x of
-    AvailableTopics ts -> do
-      putWord8 0
-      let ls = Map.toList ts
-      putInt32be (fromIntegral (length ls))
-      void (traverse put ls)
+    AvailableTopics ts -> putWord8 0 *> put ts
     BadStartSubset -> putWord8 1
     FirstGenerating t y -> putWord8 2 *> put t *> put y
     FirstOperating t y -> putWord8 3 *> put t *> put y
   get = do
     x <- getWord8
     case x of
-      0 -> do
-        l <- getInt32be
-        AvailableTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      0 -> AvailableTopics <$> get
       1 -> pure BadStartSubset
       2 -> FirstGenerating <$> get <*> get
       3 -> FirstOperating <$> get <*> get
@@ -426,7 +439,7 @@ getFirstOperating x = case x of
 data Second s
   = -- | \"Although my topics should be at least a subset of your topics available,
     -- the following of mine do not have the same max size as yours.\"
-    BadTopics (Map Topic Int32)
+    BadTopics AvailableTopics'
   | -- | \"All systems nominal, you may fire (the following subset of topics) when ready.\"
     Start (Set Topic)
   | -- | \"It's my turn to operate, so here\'s my operating message.\"
@@ -467,11 +480,7 @@ instance FromJSON s => FromJSON (Second s) where
   parseJSON x = typeMismatch "Second s" x
 instance Serialize (Second BS.ByteString) where
   put x = case x of
-    BadTopics ts -> do
-      putWord8 0
-      let ls = Map.toList ts
-      putInt32be (fromIntegral (length ls))
-      void (traverse put ls)
+    BadTopics ts -> putWord8 0 *> put ts
     Start ts -> do
       putWord8 1
       let ls = Set.toList ts
@@ -482,9 +491,7 @@ instance Serialize (Second BS.ByteString) where
   get = do
     x <- getWord8
     case x of
-      0 -> do
-        l <- getInt32be
-        BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      0 -> BadTopics <$> get
       1 -> do
         l <- getInt32be
         Start . Set.fromList <$> replicateM (fromIntegral l) get
@@ -493,11 +500,7 @@ instance Serialize (Second BS.ByteString) where
       _ -> fail "Second BS.ByteString"
 instance Serialize (Second LBS.ByteString) where
   put x = case x of
-    BadTopics ts -> do
-      putWord8 0
-      let ls = Map.toList ts
-      putInt32be (fromIntegral (length ls))
-      void (traverse put ls)
+    BadTopics ts -> putWord8 0 *> put ts
     Start ts -> do
       putWord8 1
       let ls = Set.toList ts
@@ -508,9 +511,7 @@ instance Serialize (Second LBS.ByteString) where
   get = do
     x <- getWord8
     case x of
-      0 -> do
-        l <- getInt32be
-        BadTopics . Map.fromList <$> replicateM (fromIntegral l) get
+      0 -> BadTopics <$> get
       1 -> do
         l <- getInt32be
         Start . Set.fromList <$> replicateM (fromIntegral l) get
@@ -535,8 +536,8 @@ getSecondOperating x = case x of
 data Failure them s
   = -- | Topic sets do not match between peers
     BadTopicsFailure
-    { badTopicsFirst :: Map Topic Int32
-    , badTopicsSecond :: Map Topic Int32
+    { badTopicsFirst :: AvailableTopics'
+    , badTopicsSecond :: AvailableTopics'
     }
   | -- | The first peer doesn\'t have the subset topics identified by second
     BadStartSubsetFailure (Set Topic)
@@ -606,10 +607,10 @@ firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
         where
           go s = case s of
             ExistsSymbiote s' -> maxSize s'
-  encodeAndSend (AvailableTopics myTopics)
+  encodeAndSend (AvailableTopics (AvailableTopics' myTopics))
   shouldBeStart <- receiveAndDecode
   case shouldBeStart of
-    BadTopics badTopics -> onFailure (BadTopicsFailure myTopics badTopics)
+    BadTopics badTopics -> onFailure (BadTopicsFailure (AvailableTopics' myTopics) badTopics)
     Start topicsSubset
       | not (topicsSubset `Set.isSubsetOf` Map.keysSet myTopics) -> do
         encodeAndSend BadStartSubset
@@ -657,15 +658,15 @@ secondPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
   state <- runSymbioteT x False
   shouldBeAvailableTopics <- receiveAndDecode
   case shouldBeAvailableTopics of
-    AvailableTopics topicsAvailable -> do
+    AvailableTopics (AvailableTopics' topicsAvailable) -> do
       let myTopics = go <$> state
             where
               go s = case s of
                 ExistsSymbiote s' -> maxSize s'
       if not (myTopics `Map.isSubmapOf` topicsAvailable)
         then do
-          encodeAndSend (BadTopics myTopics)
-          onFailure (BadTopicsFailure topicsAvailable myTopics)
+          encodeAndSend (BadTopics (AvailableTopics' myTopics))
+          onFailure (BadTopicsFailure (AvailableTopics' topicsAvailable) (AvailableTopics' myTopics))
         else do
           encodeAndSend (Start (Map.keysSet myTopics))
           topicsToProcess <- liftIO (newTVarIO (Map.keysSet myTopics))

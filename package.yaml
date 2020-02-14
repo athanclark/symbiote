@@ -38,6 +38,7 @@ dependencies:
 - threaded
 - QuickCheck
 - quickcheck-instances
+- unordered-containers
 - uuid
 - websockets-simple >= 0.2.0
 - websockets-simple-extra
