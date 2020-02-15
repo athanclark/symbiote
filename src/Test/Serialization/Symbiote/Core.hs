@@ -52,13 +52,38 @@ import qualified Test.QuickCheck.Gen as QC
 
 
 -- | A type-level relation between a type and appropriate, testable operations on that type.
+--
+-- Usage:
+--
+-- > data Foo = Foo | Bar | Baz Int
+-- >
+-- > f :: Foo -> Bool
+-- > f Foo = True
+-- > f _   = False
+-- >
+-- > g :: Foo -> Int -> Int
+-- > g (Baz x) _ = x
+-- > g _       y = y
+-- >
+-- > instance SymbioteOperation Foo (Either Bool Int) where
+-- >   data Operation Foo
+-- >     = F
+-- >     | G Int -- extra parameter to `g`
+-- >
+-- >   perform op x = case op of
+-- >     F   -> Left (f x)
+-- >     G y -> Right (g x y)
+
 class SymbioteOperation a o | a -> o where
   -- | An enumerated type of operations on @a@ that result in @o@.
   data Operation a :: *
   -- | Apply the 'Operation' to @a@, to get an @o@.
   perform :: Operation a -> a -> o
 
--- | A serialization format for a particular type, and serialized data type.
+-- | A serialization format for a particular type, and serialized data type. You will likely not need to write
+-- instances of this for your data types, but rather import the orphan instances in
+-- "Test.Serialization.Symbiote.Aeson", "Test.Serialization.Symbiote.Cereal", and
+-- "Test.Serialization.Symbiote.Cereal.Lazy".
 class SymbioteOperation a o => Symbiote a o s | a -> o where
   encode    :: a -> s
   decode    :: s -> Maybe a
@@ -73,7 +98,7 @@ class SymbioteOperation a o => Symbiote a o s | a -> o where
 -- | Unique name of a type, for a suite of tests. <https://docs.symbiotic-data.io/en/latest/testsuitetypes.html#topic Ref - Topic>.
 newtype Topic = Topic Text
   deriving (Eq, Ord, Show, IsString, Arbitrary, ToJSON, FromJSON, ToJSONKey, FromJSONKey)
--- | Serialized as a @String32@ in the <https://symbiotic-data.github.io/#/data/?id=string32 symbiotic-data standard>.
+-- | Serialized as a @String32@ in the <https://docs.symbiotic-data.io/en/latest/data.html#string32 symbiotic-data standard>.
 instance Serialize Topic where
   put (Topic t) = do
     putInt32be (fromIntegral (Data.Text.length t))

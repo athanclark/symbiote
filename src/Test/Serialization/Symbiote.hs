@@ -24,11 +24,21 @@ License: BSD-3-Style
 Maintainer: athan.clark@gmail.com
 Portability: GHC
 
-As an example, say you have some data type @TypeA@, and some encoding / decoding instance with Aeson
-for that data type. Now, you've also got a few functions that work with that data type - @f :: TypeA -> TypeA@
-and @g :: TypeA -> TypeA -> TypeA@, and you've also taken the time to write a proper 'Arbitrary' instance for @TypeA@.
+This project aims to act as a test suite for both randomly generating test cases, and communicating them
+to a different client, to verify it has correct serialization. You can read more in the
+<https://docs.symbiotic-data.io/en/latest/testsuite.html online documentation>.
 
-Your first order of business in making @TypeA@ a symbiote, is to first demonstrate what operations are supported by it:
+As an example, say you have some data type @TypeA@, and some JSON encoding / decoding instance with
+<http://hackage.haskell.org/package/aeson aeson>
+for that data type. Let's say you've also got a few functions that operate on that data type:
+
+> f :: TypeA -> TypeA
+> g :: TypeA -> TypeA -> TypeA
+
+Also, let's assume you've taken the time to write a proper 'Arbitrary' instance for @TypeA@.
+
+Your first order of business in making @TypeA@ a symbiote, is to first enumerate what operations
+are supported by it:
 
 > {-# LANGUAGE MultiparamTypeClasses, TypeFamilies #-}
 >
@@ -40,7 +50,7 @@ Your first order of business in making @TypeA@ a symbiote, is to first demonstra
 >     F -> f x
 >     G y -> g y x
 
-You're also going to need to make sure your new data-family has appropriate serialization instances, as well:
+You're also going to write appropriate serialization instances for your @Operation TypeA@, as well:
 
 > instance ToJSON (Operation TypeA) where
 >   toJSON op = case op of
@@ -69,17 +79,20 @@ Next, let's make @TypeA@ an instance of 'Symbiote':
 >   encodeOp = Aeson.toJSON
 >   decodeOp = Aeson.parseMaybe Aeson.parseJSON
 
-this instance above actually works for any type that implements @ToJSON@ and @FromJSON@ - there's an orphan
+This instance above actually works for any type that implements @ToJSON@ and @FromJSON@ - there's an orphan
 definition in "Test.Serialization.Symbiote.Aeson".
 
-Next, you're going to need to actually use this, by registering the type in a test suite:
+To actually use this in the testing protocol, you have to 'register' the type in a test suite:
 
 > myFancyTestSuite :: SymbioteT Value IO ()
 > myFancyTestSuite = register "TypeA" 100 (Proxy :: Proxy TypeA)
 
-Lastly, you're going to need to actually run the test suite by attaching it to a network. The best way to
-do that, is decide whether this peer will be the first or second peer to start the protocol, then use the
-respective 'firstPeer' and 'secondPeer' functions - they take as arguments functions that define "how to send"
+Lastly, you're going to need to actually run the test suite by running it to a network, like a
+WebSocket.
+
+To do that, you must first decide whether this peer will be the /first/ or /second/ peer to
+operate in the protocol, then use the
+respective 'firstPeer' and 'secondPeer' functions - they both take function arguments that define "how to send"
 and "how to receive" messages, and likewise how to report status.
 
 -}
@@ -130,8 +143,13 @@ import Test.QuickCheck.Gen (Gen, oneof)
 import GHC.Generics (Generic)
 
 
--- | The most trivial serialization medium for any @a@ and @o@.
--- There's no need to implement transmission protocol specific instances for this type, like 'ToJSON' or 'Serialize', because it is intended to operate locally (on the same program), and over 'Eq'.
+-- | The most trivial serialization medium for any input type and 'perform' output.
+--
+-- There's no need to implement transmission protocol specific instances for this type, like 'ToJSON' or
+--'Serialize', because it is intended to operate locally (on the same program), and over 'Eq'.
+--
+-- It is only useful for sanity checks, and would never be used in a real-life scenario. See
+-- @Spec.Sanity@ in @test/@ for example usage.
 data SimpleSerialization a o
   = -- | A value @a@ encodes as just that value
     SimpleValue a
@@ -156,6 +174,13 @@ instance SymbioteOperation a o => Symbiote a o (SimpleSerialization a o) where
 
 
 -- | Register a topic in the test suite builder.
+--
+-- Usage:
+--
+-- > tests :: SymbioteT s m ()
+-- > tests = do
+-- >   register "Foo" 100 (Proxy :: Proxy Foo)
+-- >   register "Bar" 1000 (Proxy :: Proxy Bar)
 register :: forall a o s m
           . Arbitrary a
          => Arbitrary (Operation a)
@@ -197,11 +222,11 @@ data Generating s
     { genValue :: s
     , genOperation :: s
     }
-  | -- | \"You sent the wrong value!\"
+  | -- | \"You sent the wrong output!\"
     BadResult s
   | -- | \"It\'s your turn to generate, I just finished and we\'re both O.K.\"
     YourTurn
-  | -- | \"I just finished all generation, and my topic state\'s 'size' is equal to the 'maxSize'.\"
+  | -- | \"I just finished all generation, and my topic state\'s 'Test.Serialization.Symbiote.Core.size' is equal to the 'maxSize'.\"
     ImFinished
   | -- | \"I could not deserialize the output value sent by you, and I have to tell you about it.\"
     GeneratingNoParseOperated s
@@ -590,7 +615,7 @@ nullProgress :: Applicative m => Topic -> Float -> m ()
 nullProgress _ _ = pure ()
 
 
--- | Run the test suite as the first peer - see "Test.Serialization.Symbiote.WebSocket" and "Test.Serialization.Symbiote.ZeroMQ" for end-user
+-- | Run the test suite as the first peer - see "Test.Serialization.Symbiote.WebSocket" for end-user
 -- implementations.
 firstPeer :: forall m s
            . MonadIO m
@@ -643,7 +668,7 @@ firstPeer encodeAndSend receiveAndDecode onSuccess onFailure onProgress x = do
     _ -> onFailure (OutOfSyncSecond shouldBeStart)
 
 
--- | Run the test suite as the second peer - see "Test.Serialization.Symbiote.WebSocket" and "Test.Serialization.Symbiote.ZeroMQ" for end-user
+-- | Run the test suite as the second peer - see "Test.Serialization.Symbiote.WebSocket" for end-user
 -- implementations.
 secondPeer :: forall s m
             . MonadIO m
